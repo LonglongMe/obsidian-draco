@@ -19,7 +19,6 @@ export interface ChatThreadColumnProps {
   showHelperComponents: boolean;
   /** Progress / indexing layer over messages; omit when null */
   statusOverlay: React.ReactNode;
-  onSaveAsNote: () => Promise<void>;
   onModeChange: (newMode: ChainType) => void;
   latestTokenCount: number | null;
   chatInput: React.ReactNode;
@@ -41,7 +40,6 @@ export function ChatThreadColumn({
   onReplaceChat,
   showHelperComponents,
   statusOverlay,
-  onSaveAsNote,
   onModeChange,
   latestTokenCount,
   chatInput,
@@ -65,7 +63,6 @@ export function ChatThreadColumn({
         {statusOverlay}
       </div>
       <ChatControls
-        onSaveAsNote={onSaveAsNote}
         onModeChange={onModeChange}
         latestTokenCount={latestTokenCount}
       />

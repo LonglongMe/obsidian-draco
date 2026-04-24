@@ -1,5 +1,6 @@
 import { PromptContextEnvelope } from "@/context/PromptContextTypes";
 import { logMarkdownBlock } from "@/logger";
+import { getSettings } from "@/settings/model";
 import { ToolRegistry } from "@/tools/ToolRegistry";
 import { formatDateTime } from "@/utils";
 
@@ -13,7 +14,6 @@ interface PromptPayloadSnapshot {
 }
 
 let latestSnapshot: PromptPayloadSnapshot | null = null;
-const COPILOT_DEBUG_FOLDER = "copilot-debug";
 const conversationDebugPathById = new Map<string, string>();
 
 /**
@@ -43,12 +43,20 @@ async function ensureFolderPathExists(path: string): Promise<void> {
 }
 
 /**
- * Persist a debug snapshot for each conversation to copilot-debug/<conversationId>.md.
+ * Persist a debug snapshot for each conversation to debugFolder/<conversationId>.md.
+ * Only writes if debug mode is enabled in settings.
  */
 async function persistSnapshotToDebugFolder(snapshot: PromptPayloadSnapshot): Promise<void> {
   if (typeof app === "undefined" || !app.vault?.adapter) {
     return;
   }
+
+  // Only write debug files if debug mode is enabled
+  if (!getSettings().debug) {
+    return;
+  }
+
+  const debugFolder = getSettings().debugFolder;
 
   const conversationId = snapshot.contextEnvelope?.conversationId || "unknown-conversation";
   const existingPath = conversationDebugPathById.get(conversationId);
@@ -96,7 +104,7 @@ async function persistSnapshotToDebugFolder(snapshot: PromptPayloadSnapshot): Pr
       .replace("{$topic}", topic)
       .replace("{$date}", timestampFileName.split("_")[0])
       .replace("{$time}", timestampFileName.split("_")[1]);
-    return `${COPILOT_DEBUG_FOLDER}/${fileName}`;
+    return `${debugFolder}/${fileName}`;
   };
 
   const filePath = resolveDebugPath();
@@ -128,7 +136,7 @@ async function persistSnapshotToDebugFolder(snapshot: PromptPayloadSnapshot): Pr
   ];
   const block = blockLines.join("\n");
 
-  await ensureFolderPathExists(COPILOT_DEBUG_FOLDER);
+  await ensureFolderPathExists(debugFolder);
   const exists = await app.vault.adapter.exists(filePath);
   if (exists) {
     // Keep one debug file per conversation and overwrite each turn.

@@ -201,6 +201,7 @@ export default class ProjectManager {
       // else
       const projectId = project.id;
       if (this.currentProjectId === projectId) {
+        setProjectLoading(false);
         return;
       }
 
@@ -254,6 +255,9 @@ export default class ProjectManager {
     try {
       if (!project.contextSource) {
         logWarn(`[loadProjectContext] Project ${project.name}: No contextSource. Aborting.`);
+        if (forUpdate) {
+          setProjectLoading(false);
+        }
         return null;
       }
       logInfo(`[loadProjectContext] Starting for project: ${project.name}`);

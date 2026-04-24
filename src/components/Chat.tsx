@@ -31,8 +31,6 @@ import IndexingProgressCard from "@/components/IndexingProgressCard";
 import ProgressCard from "@/components/project/progress-card";
 import {
   ABORT_REASON,
-  AI_SENDER,
-  DEFAULT_CHAT_HISTORY_FOLDER,
   EVENT_NAMES,
   LOADING_MESSAGES,
   RESTRICTION_MESSAGES,
@@ -42,7 +40,15 @@ import { AppContext, EventTargetContext } from "@/context";
 import { ChatInputProvider, useChatInput } from "@/context/ChatInputContext";
 import { useChatManager } from "@/hooks/useChatManager";
 import { useChatFileDrop } from "@/hooks/useChatFileDrop";
-import { getAIResponse } from "@/langchainStream";
+import { useChatStreamSessionRegistry } from "@/hooks/useChatStreamSessionRegistry";
+import { buildUserMessageContent } from "@/chat/buildUserMessageContent";
+import { computeDraftToSavedViewKeyMigration } from "@/chat/draftViewKeyMigration";
+import {
+  endStreamSessionCore,
+  runGetAIResponseForUserMessageId,
+  touchChatHistoryPathIfActive,
+} from "@/chat/llmTurnHelpers";
+import { workspaceFromSidebarProjectId } from "@/chat/workspaceTypes";
 import ChainManager from "@/LLMProviders/chainManager";
 import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
 import { logFileManager } from "@/logFileManager";
@@ -52,9 +58,9 @@ import { ChatUIState } from "@/state/ChatUIState";
 import { FileParserManager } from "@/tools/FileParserManager";
 import { ChatMessage } from "@/types/message";
 import { err2String, isPlusChain } from "@/utils";
-import { arrayBufferToBase64 } from "@/utils/base64";
 import { Notice, TFile } from "obsidian";
 import { ContextManageModal } from "@/components/modals/project/context-manage-modal";
+import { InputModal } from "@/components/modals/InputModal";
 import React, {
   useCallback,
   useContext,
@@ -99,7 +105,6 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
   const [currentChain] = useChainType();
   const [currentAiMessage, setCurrentAiMessage] = useState("");
   const [currentStreamingMessageId, setCurrentStreamingMessageId] = useState<string | null>(null);
-  const [streamSessionsVersion, setStreamSessionsVersion] = useState(0);
   const [inputMessage, setInputMessage] = useState("");
   const [latestTokenCount, setLatestTokenCount] = useState<number | null>(null);
   const activeChatIdRef = useRef<string | null>(null);
@@ -109,71 +114,6 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
   const chatConversationIdByPathRef = useRef<Map<string, string>>(new Map());
   const chatPathByConversationIdRef = useRef<Map<string, string>>(new Map());
   const refreshAllChatHistoryRef = useRef<() => Promise<void>>(async () => {});
-  const streamSessionsRef = useRef<
-    Map<
-      string,
-      {
-        abortController: AbortController | null;
-        streamingMessageId: string | null;
-        acceptChunks: boolean;
-        streamingText: string;
-        isLoading: boolean;
-        pendingMessages: ChatMessage[];
-        conversationId: string | null;
-        needsSaveAfterFlush: boolean;
-        lastUiEmitAt: number;
-        lastUiEmitText: string;
-        streamUiRaf: number | null;
-      }
-    >
-  >(new Map());
-  const getStreamSession = useCallback((viewKey: string) => {
-    const existing = streamSessionsRef.current.get(viewKey);
-    if (existing) return existing;
-    const created = {
-      abortController: null as AbortController | null,
-      streamingMessageId: null as string | null,
-      acceptChunks: false,
-      streamingText: "",
-      isLoading: false,
-      pendingMessages: [] as ChatMessage[],
-      conversationId: null as string | null,
-      needsSaveAfterFlush: false,
-      lastUiEmitAt: 0,
-      lastUiEmitText: "",
-      streamUiRaf: null as number | null,
-    };
-    streamSessionsRef.current.set(viewKey, created);
-    return created;
-  }, []);
-  const bumpStreamSessionsVersion = useCallback(() => {
-    setStreamSessionsVersion((version) => version + 1);
-  }, []);
-
-  const createScopedAddMessage = useCallback(
-    (viewKey: string) => (message: ChatMessage) => {
-      const session = getStreamSession(viewKey);
-      const shouldAttachId =
-        session.streamingMessageId &&
-        message.sender === AI_SENDER &&
-        !message.isErrorMessage &&
-        !message.id;
-      const messageToAdd = shouldAttachId
-        ? { ...message, id: session.streamingMessageId as string }
-        : message;
-
-      if (currentViewKeyRef.current !== viewKey && messageToAdd.sender === AI_SENDER && !messageToAdd.isErrorMessage) {
-        session.pendingMessages.push(messageToAdd);
-        return;
-      }
-
-      rawAddMessage(messageToAdd);
-      if (messageToAdd.sender === AI_SENDER && messageToAdd.responseMetadata?.tokenUsage?.totalTokens) {
-        setLatestTokenCount(messageToAdd.responseMetadata.tokenUsage.totalTokens);
-      }
-    },
-    [getStreamSession, rawAddMessage]
-  );
 
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES.DEFAULT);
@@ -191,6 +131,11 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     () =>
       `${activeChatId ?? `__draft__:${draftSessionId}`}::${selectedSidebarProjectId ?? "__no_project_page__"}`,
     [activeChatId, selectedSidebarProjectId, draftSessionId]
+  );
+
+  const chatWorkspace = useMemo(
+    () => workspaceFromSidebarProjectId(selectedSidebarProjectId),
+    [selectedSidebarProjectId]
   );
 
   const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
@@ -227,41 +172,20 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     []
   );
 
-  const scheduleStreamUiFlush = useCallback(
-    (viewKey: string) => {
-      const session = getStreamSession(viewKey);
-      if (session.streamUiRaf != null) {
-        return;
-      }
-      session.streamUiRaf = window.requestAnimationFrame(() => {
-        session.streamUiRaf = null;
-        if (!session.acceptChunks) return;
-        if (currentViewKeyRef.current !== viewKey) return;
-        safeSet.setCurrentAiMessage(session.streamingText);
-      });
-    },
-    [getStreamSession, safeSet]
-  );
-
-  const createScopedStreamUpdater = useCallback(
-    (viewKey: string) => (value: string) => {
-      const session = getStreamSession(viewKey);
-      if (!session.acceptChunks) return;
-      session.streamingText = value;
-      if (currentViewKeyRef.current === viewKey) {
-        scheduleStreamUiFlush(viewKey);
-      }
-    },
-    [getStreamSession, scheduleStreamUiFlush]
-  );
-
-  const createScopedAbortSetter = useCallback(
-    (viewKey: string) => (controller: AbortController | null) => {
-      const session = getStreamSession(viewKey);
-      session.abortController = controller;
-    },
-    [getStreamSession]
-  );
+  const {
+    streamSessionsRef,
+    bumpStreamSessionsVersion,
+    getStreamSession,
+    createScopedAddMessage,
+    createScopedStreamUpdater,
+    createScopedAbortSetter,
+    runningChatIds,
+  } = useChatStreamSessionRegistry({
+    currentViewKeyRef,
+    rawAddMessage,
+    setLatestTokenCount,
+    safeSet,
+  });
 
   // Must run in useLayoutEffect: if this runs in useEffect, the first await inside
   // handleSendMessage yields before paint, and an empty per-view cache can replaceMessages([])
@@ -451,28 +375,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     }
 
     try {
-      // Create message content array
-      const content: any[] = [];
-
-      // Add text content if present
-      if (inputMessage) {
-        content.push({
-          type: "text",
-          text: inputMessage,
-        });
-      }
-
-      // Add images if present
-      for (const image of selectedImages) {
-        const imageData = await image.arrayBuffer();
-        const base64Image = arrayBufferToBase64(imageData);
-        content.push({
-          type: "image_url",
-          image_url: {
-            url: `data:${image.type};base64,${base64Image}`,
-          },
-        });
-      }
+      const content = await buildUserMessageContent(inputMessage, selectedImages);
 
       // Prepare context notes and deduplicate by path
       const allNotes = [...(passedContextNotes || []), ...contextNotes];
@@ -541,48 +444,40 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
 
       // Bind draft UI sessions to the saved note path so stream state / per-view message caches
       // stay aligned when opening this chat from the sidebar (file path key vs __draft__ key).
-      const convIdForPath = streamSession.conversationId;
-      const canPromoteDraftToSavedChat =
-        streamViewKey.startsWith("__draft__:") && selectedSidebarProjectIdRef.current == null;
-      if (convIdForPath && canPromoteDraftToSavedChat) {
-        let savedChatPath = chatPathByConversationIdRef.current.get(convIdForPath);
-        if (!savedChatPath) {
-          savedChatPath = `${DEFAULT_CHAT_HISTORY_FOLDER}/${convIdForPath}.md`;
+      const migration = computeDraftToSavedViewKeyMigration({
+        streamViewKey,
+        conversationId: streamSession.conversationId,
+        selectedSidebarProjectId: selectedSidebarProjectIdRef.current,
+        chatPathByConversationId: chatPathByConversationIdRef.current,
+        chatHistoryFolder: settings.chatHistoryFolder,
+      });
+      if (migration) {
+        const { oldKey, newKey, savedChatPath } = migration;
+        const sess = streamSessionsRef.current.get(oldKey);
+        if (sess) {
+          streamSessionsRef.current.set(newKey, sess);
+          streamSessionsRef.current.delete(oldKey);
         }
-        const migratedKey = `${savedChatPath}::__no_project_page__`;
-        if (migratedKey !== streamViewKey) {
-          const oldKey = streamViewKey;
-          const sess = streamSessionsRef.current.get(oldKey);
-          if (sess) {
-            streamSessionsRef.current.set(migratedKey, sess);
-            streamSessionsRef.current.delete(oldKey);
-          }
-          const cachedMsgs = messagesByViewKeyRef.current.get(oldKey);
-          if (cachedMsgs !== undefined) {
-            messagesByViewKeyRef.current.set(migratedKey, [...cachedMsgs]);
-            messagesByViewKeyRef.current.delete(oldKey);
-          }
-          effectiveStreamViewKey = migratedKey;
-          const stillOnThisConversation = currentViewKeyRef.current === oldKey;
-          if (stillOnThisConversation) {
-            setSelectedSidebarProjectId(null);
-            activeChatIdRef.current = savedChatPath;
-            selectedSidebarProjectIdRef.current = null;
-            currentViewKeyRef.current = migratedKey;
-            setActiveChatId(savedChatPath);
-          }
-          bumpStreamSessionsVersion();
+        const cachedMsgs = messagesByViewKeyRef.current.get(oldKey);
+        if (cachedMsgs !== undefined) {
+          messagesByViewKeyRef.current.set(newKey, [...cachedMsgs]);
+          messagesByViewKeyRef.current.delete(oldKey);
         }
+        effectiveStreamViewKey = newKey;
+        const stillOnThisConversation = currentViewKeyRef.current === oldKey;
+        if (stillOnThisConversation) {
+          setSelectedSidebarProjectId(null);
+          activeChatIdRef.current = savedChatPath;
+          selectedSidebarProjectIdRef.current = null;
+          currentViewKeyRef.current = newKey;
+          setActiveChatId(savedChatPath);
+        }
+        bumpStreamSessionsVersion();
       }
 
       const scopedAddMessage = createScopedAddMessage(effectiveStreamViewKey);
       const scopedStreamUpdater = createScopedStreamUpdater(effectiveStreamViewKey);
       const scopedAbortSetter = createScopedAbortSetter(effectiveStreamViewKey);
-      const scopedLoadingMessageUpdater = (message: string) => {
-        if (currentViewKeyRef.current === effectiveStreamViewKey) {
-          safeSet.setLoadingMessage(message);
-        }
-      };
 
       // Add to user message history
       if (inputMessage) {
@@ -590,19 +485,18 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       }
 
       // User turn is persisted by the silent save above; the post-stream save persists the full thread.
-
-      // Get the LLM message for AI processing
-      const llmMessage = chatUIState.getLLMMessage(messageId);
-      if (llmMessage) {
-        await getAIResponse(
-          llmMessage,
-          chainManager,
-          scopedAddMessage,
-          scopedStreamUpdater,
-          scopedAbortSetter,
-          { debug: settings.debug, updateLoadingMessage: scopedLoadingMessageUpdater }
-        );
-      }
+      await runGetAIResponseForUserMessageId({
+        messageId,
+        chatUIState,
+        chainManager,
+        scopedAddMessage,
+        scopedStreamUpdater,
+        scopedAbortSetter,
+        effectiveStreamViewKey,
+        currentViewKeyRef,
+        setLoadingMessage: safeSet.setLoadingMessage,
+        debug: settings.debug,
+      });
 
       // After first AI response, persist again and allow AI title generation + rename.
       if (currentViewKeyRef.current === effectiveStreamViewKey) {
@@ -621,14 +515,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       logError("Error sending message:", error);
       new Notice("Failed to send message. Please try again.");
     } finally {
-      if (streamSession.streamUiRaf != null) {
-        window.cancelAnimationFrame(streamSession.streamUiRaf);
-        streamSession.streamUiRaf = null;
-      }
-      streamSession.acceptChunks = false;
-      streamSession.abortController = null;
-      streamSession.isLoading = false;
-      streamSession.streamingMessageId = null;
+      endStreamSessionCore(streamSession);
       bumpStreamSessionsVersion();
       if (currentViewKeyRef.current === effectiveStreamViewKey) {
         safeSet.setCurrentAiMessage(streamSession.streamingText);
@@ -636,10 +523,12 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
         safeSet.setLoadingMessage(LOADING_MESSAGES.DEFAULT);
         setCurrentStreamingMessageId(null);
       }
-      const pathFromKey = effectiveStreamViewKey.split("::")[0];
-      if (!pathFromKey.startsWith("__draft__:") && currentViewKeyRef.current === effectiveStreamViewKey) {
-        void plugin.touchChatHistoryByPathIfExists(pathFromKey).then(() => refreshAllChatHistoryRef.current());
-      }
+      touchChatHistoryPathIfActive({
+        effectiveStreamViewKey,
+        currentViewKeyRef,
+        plugin,
+        refreshAllChatHistory: () => refreshAllChatHistoryRef.current(),
+      });
     }
   };
 
@@ -679,21 +568,21 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
         // Don't clear setCurrentAiMessage here
       }
     },
-    [getStreamSession, safeSet]
+    [getStreamSession, safeSet, bumpStreamSessionsVersion]
   );
 
   // Cleanup on unmount - abort any ongoing streaming
   useEffect(() => {
     isMountedRef.current = true;
+    const sessionsRef = streamSessionsRef;
     return () => {
       isMountedRef.current = false;
-      // Abort any ongoing streaming when component unmounts
-      for (const session of streamSessionsRef.current.values()) {
+      for (const session of sessionsRef.current.values()) {
         session.abortController?.abort(ABORT_REASON.UNMOUNT);
         session.abortController = null;
       }
     };
-  }, []); // No dependencies - only run on mount/unmount
+  }, [streamSessionsRef]);
 
   const handleRegenerate = useCallback(
     async (messageIndex: number) => {
@@ -737,17 +626,16 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
         logError("Error regenerating message:", error);
         new Notice("Failed to regenerate message. Please try again.");
       } finally {
-        streamSession.acceptChunks = false;
-        streamSession.abortController = null;
-        streamSession.isLoading = false;
-        streamSession.streamingMessageId = null;
+        endStreamSessionCore(streamSession, { cancelStreamUiRaf: false });
         bumpStreamSessionsVersion();
         safeSet.setLoading(false);
         setCurrentStreamingMessageId(null);
-        const pathFromKey = streamViewKey.split("::")[0];
-        if (!pathFromKey.startsWith("__draft__:") && currentViewKeyRef.current === streamViewKey) {
-          void plugin.touchChatHistoryByPathIfExists(pathFromKey).then(() => refreshAllChatHistoryRef.current());
-        }
+        touchChatHistoryPathIfActive({
+          effectiveStreamViewKey: streamViewKey,
+          currentViewKeyRef,
+          plugin,
+          refreshAllChatHistory: () => refreshAllChatHistoryRef.current(),
+        });
       }
     },
     [
@@ -798,11 +686,6 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
             const scopedAddMessage = createScopedAddMessage(streamViewKey);
             const scopedStreamUpdater = createScopedStreamUpdater(streamViewKey);
             const scopedAbortSetter = createScopedAbortSetter(streamViewKey);
-            const scopedLoadingMessageUpdater = (message: string) => {
-              if (currentViewKeyRef.current === streamViewKey) {
-                safeSet.setLoadingMessage(message);
-              }
-            };
             streamSession.streamingMessageId = `msg-${uuidv4()}`;
             streamSession.acceptChunks = true;
             streamSession.isLoading = true;
@@ -814,34 +697,34 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
             }
             safeSet.setLoading(true);
             try {
-              const llmMessage = chatUIState.getLLMMessage(messageToEdit.id!);
-              if (llmMessage) {
-                await getAIResponse(
-                  llmMessage,
-                  chainManager,
-                  scopedAddMessage,
-                  scopedStreamUpdater,
-                  scopedAbortSetter,
-                  { debug: settings.debug, updateLoadingMessage: scopedLoadingMessageUpdater }
-                );
-              }
+              await runGetAIResponseForUserMessageId({
+                messageId: messageToEdit.id!,
+                chatUIState,
+                chainManager,
+                scopedAddMessage,
+                scopedStreamUpdater,
+                scopedAbortSetter,
+                effectiveStreamViewKey: streamViewKey,
+                currentViewKeyRef,
+                setLoadingMessage: safeSet.setLoadingMessage,
+                debug: settings.debug,
+              });
             } catch (error) {
               logError("Error regenerating AI response:", error);
               new Notice("Failed to regenerate AI response. Please try again.");
             } finally {
-              streamSession.acceptChunks = false;
-              streamSession.abortController = null;
-              streamSession.isLoading = false;
-              streamSession.streamingMessageId = null;
+              endStreamSessionCore(streamSession, { cancelStreamUiRaf: false });
               bumpStreamSessionsVersion();
               safeSet.setLoading(false);
               if (currentViewKeyRef.current === streamViewKey) {
                 setCurrentStreamingMessageId(null);
               }
-              const pathFromKey = streamViewKey.split("::")[0];
-              if (!pathFromKey.startsWith("__draft__:") && currentViewKeyRef.current === streamViewKey) {
-                void plugin.touchChatHistoryByPathIfExists(pathFromKey).then(() => refreshAllChatHistoryRef.current());
-              }
+              touchChatHistoryPathIfActive({
+                effectiveStreamViewKey: streamViewKey,
+                currentViewKeyRef,
+                plugin,
+                refreshAllChatHistory: () => refreshAllChatHistoryRef.current(),
+              });
             }
           }
         }
@@ -866,18 +749,6 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       safeSet,
     ]
   );
-
-  const runningChatIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const [viewKey, session] of streamSessionsRef.current.entries()) {
-      if (!session.isLoading) continue;
-      const chatId = viewKey.split("::")[0];
-      if (chatId && chatId !== "__draft__") {
-        ids.add(chatId);
-      }
-    }
-    return Array.from(ids);
-  }, [streamSessionsVersion]);
 
   // Expose handleSaveAsNote to parent
   useEffect(() => {
@@ -1212,49 +1083,41 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     [plugin, handleLoadAllChatHistory]
   );
 
-  const handleEditProjectFromSidebar = useCallback(
-    (projectId: string) => {
-      const project = (settings.projectList || []).find((item) => item.id === projectId);
-      if (!project) return;
-      new ContextManageModal(
-        app,
-        (updatedProject) => {
-          handleEditProject(project, updatedProject);
-        },
-        project
-      ).open();
-    },
-    [settings.projectList, app, handleEditProject]
-  );
-
   /**
    * Rename a project from sidebar menu.
    */
   const handleRenameProjectFromSidebar = useCallback(
     (projectId: string, currentName: string) => {
-      const nextName = window.prompt("Rename project", currentName)?.trim();
-      if (!nextName || nextName === currentName) return;
+      new InputModal(
+        app,
+        "Rename Project",
+        currentName,
+        (nextName: string) => {
+          if (!nextName || nextName === currentName) return;
 
-      const hasDuplicate = (settings.projectList || []).some(
-        (project) => project.id !== projectId && project.name === nextName
-      );
-      if (hasDuplicate) {
-        new Notice(`Project "${nextName}" already exists`);
-        return;
-      }
+          const hasDuplicate = (settings.projectList || []).some(
+            (project) => project.id !== projectId && project.name === nextName
+          );
+          if (hasDuplicate) {
+            new Notice(`Project "${nextName}" already exists`);
+            return;
+          }
 
-      const updatedProjects = (settings.projectList || []).map((project) =>
-        project.id === projectId ? { ...project, name: nextName } : project
-      );
-      updateSetting("projectList", updatedProjects);
+          const updatedProjects = (settings.projectList || []).map((project) =>
+            project.id === projectId ? { ...project, name: nextName } : project
+          );
+          updateSetting("projectList", updatedProjects);
 
-      if (getCurrentProject()?.id === projectId) {
-        const updatedCurrent = updatedProjects.find((project) => project.id === projectId) || null;
-        setCurrentProject(updatedCurrent);
-      }
-      new Notice("Project renamed.");
+          if (getCurrentProject()?.id === projectId) {
+            const updatedCurrent = updatedProjects.find((project) => project.id === projectId) || null;
+            setCurrentProject(updatedCurrent);
+          }
+          new Notice("Project renamed.");
+        },
+        "Enter project name"
+      ).open();
     },
-    [settings.projectList]
+    [app, settings.projectList]
   );
 
   const handleSelectProjectFromSidebar = useCallback(
@@ -1414,6 +1277,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       selectedChain,
       selectedTextContexts,
       handleRemoveSelectedText,
+      latestTokenCount,
     ]
   );
 
@@ -1427,6 +1291,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       onNewChat={() => void handleNewChat()}
       sidebar={
         <ConversationSidebar
+          app={app}
           isVisible={showConversationSidebar}
           items={allChatHistoryItems}
           runningChatIds={runningChatIds}
@@ -1463,6 +1328,11 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
               activeChatId={activeChatId}
               onOpenChat={handleLoadChat}
               onUpdateProject={handleUpdateProjectConfig}
+              onRenameChat={handleRenameChat}
+              onDeleteChat={handleDeleteChat}
+              onTogglePin={handleToggleChatPin}
+              onChangeChatProject={handleAssignChatProject}
+              projects={(settings.projectList || []).map((project) => ({ id: project.id, name: project.name }))}
               inputArea={renderSharedChatInput(async (args) => {
                 const project = (settings.projectList || []).find(
                   (item) => item.id === selectedSidebarProjectId
@@ -1526,7 +1396,6 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
                   </ChatModalBackdrop>
                 ) : null
               }
-              onSaveAsNote={handleSaveAsNote}
               onModeChange={(newMode) => {
                 setPreviousMode(selectedChain);
                 if (newMode === ChainType.PROJECT_CHAIN) {
@@ -1554,6 +1423,8 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
   return (
     <div
       ref={chatContainerRef}
+      data-chat-workspace={chatWorkspace.kind}
+      data-chat-project={chatWorkspace.projectId ?? ""}
       onPointerDownCapture={handleChatPointerDownCapture}
       className="tw-flex tw-size-full tw-flex-col tw-overflow-hidden"
     >

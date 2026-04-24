@@ -19,7 +19,7 @@ import {
   toUniqueLines,
 } from "@/utils/projectMaterialsUtils";
 import { TFile } from "obsidian";
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 
 export interface ProjectOverviewPanelProps {
   project: ProjectConfig | null;
@@ -28,6 +28,11 @@ export interface ProjectOverviewPanelProps {
   activeChatId: string | null;
   onOpenChat: (id: string) => Promise<void>;
   onUpdateProject: (projectId: string, updater: (project: ProjectConfig) => ProjectConfig) => void;
+  onRenameChat?: (id: string, title: string) => Promise<void>;
+  onDeleteChat?: (id: string) => Promise<void>;
+  onTogglePin?: (id: string, pinned: boolean) => Promise<void>;
+  onChangeChatProject?: (chatId: string, projectId: string | null) => Promise<void>;
+  projects?: Array<{ id: string; name: string }>;
   inputArea: React.ReactNode;
 }
 
@@ -41,11 +46,18 @@ export function ProjectOverviewPanel({
   activeChatId,
   onOpenChat,
   onUpdateProject,
+  onRenameChat,
+  onDeleteChat,
+  onTogglePin,
+  onChangeChatProject,
+  projects,
   inputArea,
 }: ProjectOverviewPanelProps) {
   const [isPromptDialogOpen, setIsPromptDialogOpen] = useState(false);
   const [isMaterialsDialogOpen, setIsMaterialsDialogOpen] = useState(false);
   const [isMaterialPickerOpen, setIsMaterialPickerOpen] = useState(false);
+  const [isChangeProjectDialogOpen, setIsChangeProjectDialogOpen] = useState(false);
+  const [selectedChatForProjectChange, setSelectedChatForProjectChange] = useState<string | null>(null);
   const [promptDraft, setPromptDraft] = useState("");
 
   const materials = useMemo(() => buildMaterialsFromProject(project), [project]);
@@ -97,6 +109,19 @@ export function ProjectOverviewPanel({
     });
     setIsMaterialPickerOpen(false);
   };
+
+  const handleOpenChangeProjectDialog = useCallback((chatId: string) => {
+    setSelectedChatForProjectChange(chatId);
+    setIsChangeProjectDialogOpen(true);
+  }, []);
+
+  const handleChangeProject = useCallback((newProjectId: string | null) => {
+    if (selectedChatForProjectChange) {
+      void onChangeChatProject?.(selectedChatForProjectChange, newProjectId);
+    }
+    setIsChangeProjectDialogOpen(false);
+    setSelectedChatForProjectChange(null);
+  }, [selectedChatForProjectChange, onChangeChatProject]);
 
   const materialsCount =
     countNonEmptyLines(project.contextSource?.inclusions) +
@@ -159,6 +184,10 @@ export function ProjectOverviewPanel({
                   runningChatIds={runningChatIds}
                   activeChatId={activeChatId}
                   onOpenChat={onOpenChat}
+                  onRenameChat={onRenameChat}
+                  onDeleteChat={onDeleteChat}
+                  onTogglePin={onTogglePin}
+                  onChangeProject={onChangeChatProject ? handleOpenChangeProjectDialog : undefined}
                 />
               ))}
               {chats.length === 0 ? (
@@ -236,6 +265,40 @@ export function ProjectOverviewPanel({
             </Popover>
             <Button onClick={() => setIsMaterialsDialogOpen(false)}>Done</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Change Project Dialog */}
+      <Dialog open={isChangeProjectDialogOpen} onOpenChange={setIsChangeProjectDialogOpen}>
+        <DialogContent className="tw-max-w-md">
+          <DialogHeader>
+            <DialogTitle>Move to Project</DialogTitle>
+            <DialogDescription>Select a project to move this chat to.</DialogDescription>
+          </DialogHeader>
+          <div className="tw-max-h-[200px] tw-space-y-1 tw-overflow-auto">
+            <Button
+              variant="ghost"
+              className="tw-w-full tw-justify-start"
+              onClick={() => handleChangeProject(null)}
+            >
+              No Project
+            </Button>
+            {projects?.filter(p => p.id !== project?.id).map((p) => (
+              <Button
+                key={p.id}
+                variant="ghost"
+                className="tw-w-full tw-justify-start"
+                onClick={() => handleChangeProject(p.id)}
+              >
+                {p.name}
+              </Button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setIsChangeProjectDialogOpen(false)}>
+              Cancel
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -15,7 +15,6 @@ import { DropdownMenu, DropdownMenuTrigger } from "@radix-ui/react-dropdown-menu
 import {
   AlertTriangle,
   CheckCircle,
-  Download,
   FileText,
   History,
   MoreHorizontal,
@@ -175,7 +174,6 @@ export async function forceRebuildCurrentProjectContext() {
 }
 
 interface ChatControlsProps {
-  onSaveAsNote: () => Promise<void>;
   onModeChange: (mode: ChainType) => void;
   onCloseProject?: () => void;
   latestTokenCount?: number | null;
@@ -184,7 +182,6 @@ interface ChatControlsProps {
 }
 
 export function ChatControls({
-  onSaveAsNote,
   onModeChange,
   onCloseProject,
   latestTokenCount,
@@ -231,14 +228,6 @@ export function ChatControls({
             </TooltipContent>
           </Tooltip>
         ) : null}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost2" size="icon" title="Save Chat as Note" onClick={onSaveAsNote}>
-              <Download className="tw-size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Save Chat as Note</TooltipContent>
-        </Tooltip>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost2" size="icon" title="Advanced Settings">

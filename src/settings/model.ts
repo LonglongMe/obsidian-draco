@@ -187,6 +187,10 @@ export interface CopilotSettings {
   autoCompactThreshold: number;
   /** Folder where converted document markdown files are saved */
   convertedDocOutputFolder: string;
+  /** Folder where chat history (conversations) are saved */
+  chatHistoryFolder: string;
+  /** Folder where debug logs are saved */
+  debugFolder: string;
 }
 
 export const settingsStore = createStore();

@@ -4,11 +4,11 @@ import { SettingItem } from "@/components/ui/setting-item";
 import { SettingsGroup } from "@/components/ui/settings-group";
 import { getModelDisplayWithIcons } from "@/components/ui/model-display";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
-import { DEFAULT_OPEN_AREA, SEND_SHORTCUT } from "@/constants";
+import { COPILOT_FOLDER_ROOT, DEFAULT_CHAT_HISTORY_FOLDER, DEFAULT_OPEN_AREA, SEND_SHORTCUT } from "@/constants";
 import { useTab } from "@/contexts/TabContext";
 import { getModelKeyFromModel, updateSetting, useSettingsValue } from "@/settings/model";
 import { checkModelApiKey } from "@/utils";
-import { Key } from "lucide-react";
+import { FolderOpen, Key } from "lucide-react";
 import { Notice } from "obsidian";
 import React from "react";
 import { ApiKeyDialog } from "./ApiKeyDialog";
@@ -160,6 +160,26 @@ export const BasicSettings: React.FC = () => {
           description="Show relevant notes in the chat view"
           checked={settings.showRelevantNotes}
           onCheckedChange={(checked) => updateSetting("showRelevantNotes", checked)}
+        />
+      </SettingsGroup>
+
+      {/* Storage Settings Group */}
+      <SettingsGroup title="Storage">
+        <SettingItem
+          type="text"
+          title="Chat History Folder"
+          description="Folder where chat conversations are saved"
+          value={settings.chatHistoryFolder}
+          onChange={(value) => updateSetting("chatHistoryFolder", value)}
+          placeholder={DEFAULT_CHAT_HISTORY_FOLDER}
+        />
+        <SettingItem
+          type="text"
+          title="Debug Log Folder"
+          description="Folder where debug logs are saved"
+          value={settings.debugFolder}
+          onChange={(value) => updateSetting("debugFolder", value)}
+          placeholder={`${COPILOT_FOLDER_ROOT}/debug`}
         />
       </SettingsGroup>
     </div>

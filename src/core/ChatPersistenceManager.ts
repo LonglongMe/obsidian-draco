@@ -1,8 +1,9 @@
 import { getCurrentProject, ProjectConfig } from "@/aiParams";
-import { AI_SENDER, DEFAULT_CHAT_HISTORY_FOLDER, USER_SENDER } from "@/constants";
+import { AI_SENDER, USER_SENDER } from "@/constants";
 import ChainManager from "@/LLMProviders/chainManager";
 import { parseReasoningBlock } from "@/LLMProviders/chainRunner/utils/AgentReasoningState";
 import { logError, logInfo, logWarn } from "@/logger";
+import { getSettings } from "@/settings/model";
 import { ChatMessage } from "@/types/message";
 import {
   ensureFolderExists,
@@ -58,6 +59,13 @@ export class ChatPersistenceManager {
   ) {}
 
   /**
+   * Get the chat history folder from settings
+   */
+  private getChatHistoryFolder(): string {
+    return getSettings().chatHistoryFolder;
+  }
+
+  /**
    * Save current chat history to a markdown file
    */
   async saveChat(modelKey: string, options: SaveChatOptions = {}): Promise<void> {
@@ -83,7 +91,7 @@ export class ChatPersistenceManager {
       const firstMessageEpoch = messages[0].timestamp?.epoch || Date.now();
 
       // Ensure the save folder exists (supports nested paths) using utility helper.
-      await ensureFolderExists(DEFAULT_CHAT_HISTORY_FOLDER);
+      await ensureFolderExists(this.getChatHistoryFolder());
 
       // Prefer explicit conversationId, then bound id, then legacy epoch (epoch can collide across chats).
       let existingFile: TFile | null = null;
@@ -218,7 +226,7 @@ export class ChatPersistenceManager {
             }
           } else if (this.isNameTooLongError(error)) {
             // Single fallback: minimal guaranteed-to-work filename with fixed id
-            const fallbackName = `${DEFAULT_CHAT_HISTORY_FOLDER}/${conversationId.slice(0, 8)}.md`;
+            const fallbackName = `${this.getChatHistoryFolder()}/${conversationId.slice(0, 8)}.md`;
 
             try {
               targetFile = await this.app.vault.create(fallbackName, noteContent);
@@ -353,7 +361,7 @@ export class ChatPersistenceManager {
    * Get all chat history files from the vault
    */
   async getChatHistoryFiles(): Promise<TFile[]> {
-    const folderFiles = await listMarkdownFiles(this.app, DEFAULT_CHAT_HISTORY_FOLDER);
+    const folderFiles = await listMarkdownFiles(this.app, this.getChatHistoryFolder());
     if (folderFiles.length === 0) return [];
 
     // Get current project ID if in a project
@@ -726,7 +734,7 @@ ${conversationSummary}`;
    * Generate a stable file name for the chat using conversation ID only.
    */
   private generateFileName(conversationId: string): string {
-    return `${DEFAULT_CHAT_HISTORY_FOLDER}/${conversationId}.md`;
+    return `${this.getChatHistoryFolder()}/${conversationId}.md`;
   }
 
   /**

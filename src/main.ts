@@ -631,7 +631,8 @@ export default class CopilotPlugin extends Plugin {
   }
 
   async getChatHistoryFiles(): Promise<TFile[]> {
-    const folderFiles = await listMarkdownFiles(this.app, DEFAULT_CHAT_HISTORY_FOLDER);
+    const chatHistoryFolder = getSettings().chatHistoryFolder;
+    const folderFiles = await listMarkdownFiles(this.app, chatHistoryFolder);
     if (folderFiles.length === 0) return [];
 
     // Get current project ID if in a project
@@ -702,7 +703,8 @@ export default class CopilotPlugin extends Plugin {
    * Return all chat history items across all projects for sidebar navigation.
    */
   async getAllChatHistoryItems(): Promise<ChatHistoryItem[]> {
-    const files = await listMarkdownFiles(this.app, DEFAULT_CHAT_HISTORY_FOLDER);
+    const chatHistoryFolder = getSettings().chatHistoryFolder;
+    const files = await listMarkdownFiles(this.app, chatHistoryFolder);
     const projectNameById = new Map((getSettings().projectList || []).map((project) => [project.id, project.name]));
 
     return Promise.all(files.map(async (file) => {
@@ -758,7 +760,8 @@ export default class CopilotPlugin extends Plugin {
       const content = await this.app.vault.read(file);
       const withoutFrontmatter = content.replace(/^---[\s\S]*?---\n?/, "");
       const fromConversation = formatChatUiTitleFromBodyWithoutFrontmatter(withoutFrontmatter);
-      const uiTitle = fromConversation ?? extractChatTitle(file);
+      // Priority: frontmatter topic > auto-generated from conversation content
+      const uiTitle = extractChatTitle(file) ?? fromConversation ?? "Untitled Chat";
       const firstAiMatch = withoutFrontmatter.match(/\*\*ai\*\*:\s*([\s\S]*?)(?=\n\*\*(?:user|ai)\*\*:|$)/i);
       const firstUserMatch = withoutFrontmatter.match(/\*\*user\*\*:\s*([\s\S]*?)(?=\n\*\*(?:user|ai)\*\*:|$)/i);
       const source = firstAiMatch?.[1] || firstUserMatch?.[1] || "";
