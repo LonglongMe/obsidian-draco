@@ -9,8 +9,10 @@ import {
 import { ChainType } from "@/chainFactory";
 import { AddImageModal } from "@/components/modals/AddImageModal";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ModelSelector } from "@/components/ui/ModelSelector";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { TokenCounter } from "./TokenCounter";
 import { ChatToolControls } from "./ChatToolControls";
 import { isPlusChain } from "@/utils";
 import {
@@ -22,7 +24,7 @@ import {
 import { useSettingsValue } from "@/settings/model";
 import { SelectedTextContext, WebTabContext } from "@/types/message";
 import { isAllowedFileForNoteContext } from "@/utils";
-import { CornerDownLeft, Image, Loader2, StopCircle, X } from "lucide-react";
+import { ArrowUp, ChevronDown, Database, Image, Loader2, MessageSquare, StopCircle, X } from "lucide-react";
 import { App, Notice, TFile } from "obsidian";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { $getSelection, $isRangeSelection } from "lexical";
@@ -64,6 +66,7 @@ interface ChatInputProps {
   onRemoveSelectedText?: (id: string) => void;
   showProgressCard: () => void;
   showIndexingCard?: () => void;
+  latestTokenCount?: number | null;
 
   // Edit mode props
   editMode?: boolean;
@@ -105,6 +108,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onRemoveSelectedText,
   showProgressCard,
   showIndexingCard,
+  latestTokenCount = null,
   editMode = false,
   onEditSave,
   onEditCancel,
@@ -116,7 +120,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const lexicalEditorRef = useRef<any>(null);
   const [currentModelKey, setCurrentModelKey] = useModelKey();
-  const [currentChain] = useChainType();
+  const [currentChain, setCurrentChain] = useChainType();
   const [isProjectLoading] = useProjectLoading();
   const settings = useSettingsValue();
   const [currentActiveNote, setCurrentActiveNote] = useState<TFile | null>(() => {
@@ -713,177 +717,209 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
   return (
     <div
-      className="tw-flex tw-w-full tw-flex-col tw-gap-0.5 tw-rounded-md tw-border tw-border-solid tw-border-border tw-px-1 tw-pb-1 tw-pt-2 tw-@container/chat-input"
+      className="tw-w-full tw-rounded-lg tw-border tw-border-solid tw-border-border tw-@container/chat-input"
       ref={containerRef}
     >
-      {/* Hide context controls in edit mode - editing only changes text, not context */}
-      {!editMode && (
-        <ContextControl
-          contextNotes={contextNotes}
-          includeActiveNote={includeActiveNote}
-          activeNote={currentActiveNote}
-          includeActiveWebTab={includeActiveWebTab}
-          activeWebTab={activeWebTab}
-          contextUrls={contextUrls}
-          contextFolders={contextFolders}
-          contextWebTabs={mergedContextWebTabs}
-          selectedTextContexts={selectedTextContexts}
-          showProgressCard={showProgressCard}
-          showIndexingCard={showIndexingCard}
-          lexicalEditorRef={lexicalEditorRef}
-          onAddToContext={handleAddToContext}
-          onRemoveFromContext={handleRemoveFromContext}
-        />
-      )}
+      <div className="tw-flex tw-flex-col tw-gap-0.5 tw-px-2 tw-pb-1 tw-pt-2">
+        {/* Hide context controls in edit mode - editing only changes text, not context */}
+        {!editMode && (
+          <ContextControl
+            contextNotes={contextNotes}
+            includeActiveNote={includeActiveNote}
+            activeNote={currentActiveNote}
+            includeActiveWebTab={includeActiveWebTab}
+            activeWebTab={activeWebTab}
+            contextUrls={contextUrls}
+            contextFolders={contextFolders}
+            contextWebTabs={mergedContextWebTabs}
+            selectedTextContexts={selectedTextContexts}
+            showProgressCard={showProgressCard}
+            showIndexingCard={showIndexingCard}
+            lexicalEditorRef={lexicalEditorRef}
+            onAddToContext={handleAddToContext}
+            onRemoveFromContext={handleRemoveFromContext}
+          />
+        )}
 
-      {selectedImages.length > 0 && (
-        <div className="selected-images">
-          {selectedImages.map((file, index) => (
-            <div key={index} className="image-preview-container">
-              <img
-                src={URL.createObjectURL(file)}
-                alt={file.name}
-                className="selected-image-preview"
-              />
-              <button
-                className="remove-image-button"
-                onClick={() => setSelectedImages((prev) => prev.filter((_, i) => i !== index))}
-                title="Remove image"
-              >
-                <X className="tw-size-4" />
-              </button>
+        {selectedImages.length > 0 && (
+          <div className="selected-images">
+            {selectedImages.map((file, index) => (
+              <div key={index} className="image-preview-container">
+                <img
+                  src={URL.createObjectURL(file)}
+                  alt={file.name}
+                  className="selected-image-preview"
+                />
+                <button
+                  className="remove-image-button"
+                  onClick={() => setSelectedImages((prev) => prev.filter((_, i) => i !== index))}
+                  title="Remove image"
+                >
+                  <X className="tw-size-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="tw-relative tw-mt-1">
+          {isProjectLoading && (
+            <div className="tw-absolute tw-inset-0 tw-z-modal tw-flex tw-items-center tw-justify-center tw-bg-primary tw-opacity-80 tw-backdrop-blur-sm">
+              <div className="tw-flex tw-items-center tw-gap-2">
+                <Loader2 className="tw-size-4 tw-animate-spin" />
+                <span className="tw-text-sm">{loadingMessages[loadingMessageIndex]}</span>
+              </div>
             </div>
-          ))}
+          )}
+          <LexicalEditor
+            value={inputMessage}
+            onChange={(value) => setInputMessage(value)}
+            onSubmit={onSendMessage}
+            onNotesChange={setNotesFromPills}
+            onNotesRemoved={handleNotePillsRemoved}
+            onActiveNoteAdded={handleActiveNoteAdded}
+            onActiveNoteRemoved={handleActiveNoteRemoved}
+            onURLsChange={isCopilotPlus ? setUrlsFromPills : undefined}
+            onURLsRemoved={isCopilotPlus ? handleURLPillsRemoved : undefined}
+            onToolsChange={isCopilotPlus ? setToolsFromPills : undefined}
+            onToolsRemoved={isCopilotPlus ? handleToolPillsRemoved : undefined}
+            onFoldersChange={setFoldersFromPills}
+            onFoldersRemoved={handleFolderPillsRemoved}
+            onWebTabsChange={setWebTabsFromPills}
+            onActiveWebTabAdded={handleActiveWebTabAdded}
+            onActiveWebTabRemoved={handleActiveWebTabRemoved}
+            onEditorReady={onEditorReady}
+            onImagePaste={onAddImage}
+            onTagSelected={handleTagSelected}
+            placeholder={"Your AI assistant for Obsidian • @ to add context • / for custom prompts"}
+            disabled={isProjectLoading}
+            isCopilotPlus={isCopilotPlus}
+            currentActiveFile={currentActiveNote}
+            currentChain={currentChain}
+          />
         </div>
-      )}
 
-      <div className="tw-relative">
-        {isProjectLoading && (
-          <div className="tw-absolute tw-inset-0 tw-z-modal tw-flex tw-items-center tw-justify-center tw-bg-primary tw-opacity-80 tw-backdrop-blur-sm">
-            <div className="tw-flex tw-items-center tw-gap-2">
-              <Loader2 className="tw-size-4 tw-animate-spin" />
-              <span className="tw-text-sm">{loadingMessages[loadingMessageIndex]}</span>
-            </div>
-          </div>
-        )}
-        <LexicalEditor
-          value={inputMessage}
-          onChange={(value) => setInputMessage(value)}
-          onSubmit={onSendMessage}
-          onNotesChange={setNotesFromPills}
-          onNotesRemoved={handleNotePillsRemoved}
-          onActiveNoteAdded={handleActiveNoteAdded}
-          onActiveNoteRemoved={handleActiveNoteRemoved}
-          onURLsChange={isCopilotPlus ? setUrlsFromPills : undefined}
-          onURLsRemoved={isCopilotPlus ? handleURLPillsRemoved : undefined}
-          onToolsChange={isCopilotPlus ? setToolsFromPills : undefined}
-          onToolsRemoved={isCopilotPlus ? handleToolPillsRemoved : undefined}
-          onFoldersChange={setFoldersFromPills}
-          onFoldersRemoved={handleFolderPillsRemoved}
-          onWebTabsChange={setWebTabsFromPills}
-          onActiveWebTabAdded={handleActiveWebTabAdded}
-          onActiveWebTabRemoved={handleActiveWebTabRemoved}
-          onEditorReady={onEditorReady}
-          onImagePaste={onAddImage}
-          onTagSelected={handleTagSelected}
-          placeholder={"Your AI assistant for Obsidian • @ to add context • / for custom prompts"}
-          disabled={isProjectLoading}
-          isCopilotPlus={isCopilotPlus}
-          currentActiveFile={currentActiveNote}
-          currentChain={currentChain}
-        />
-      </div>
-
-      <div className="tw-flex tw-h-6 tw-justify-between tw-gap-1 tw-px-1">
-        {isGenerating ? (
-          <div className="tw-flex tw-items-center tw-gap-1 tw-px-1 tw-text-sm tw-text-muted">
-            <Loader2 className="tw-size-3 tw-animate-spin" />
-            <span>Generating...</span>
-          </div>
-        ) : (
-          <div className="tw-min-w-0 tw-flex-1">
-            <ModelSelector
-              variant="ghost2"
-              size="fit"
-              disabled={disableModelSwitch}
-              value={getDisplayModelKey()}
-              onChange={(modelKey) => {
-                // In project mode, we don't update the global model key
-                // as the project model takes precedence
-                if (currentChain !== ChainType.PROJECT_CHAIN) {
-                  setCurrentModelKey(modelKey);
-                }
-              }}
-              className="tw-max-w-full tw-truncate"
-            />
-          </div>
-        )}
-
-        <div className="tw-flex tw-items-center tw-gap-1">
+        <div className="tw-flex tw-h-7 tw-justify-between tw-gap-1">
           {isGenerating ? (
-            <Button
-              variant="ghost2"
-              size="fit"
-              className="tw-text-muted"
-              onClick={() => onStopGenerating()}
-            >
-              <StopCircle className="tw-size-4" />
-              Stop
-            </Button>
+            <div className="tw-flex tw-items-center tw-gap-1 tw-text-sm tw-text-muted">
+              <Loader2 className="tw-size-3 tw-animate-spin" />
+              <span>Generating...</span>
+            </div>
           ) : (
-            <>
-              <ChatToolControls
-                vaultToggle={vaultToggle}
-                setVaultToggle={setVaultToggle}
-                webToggle={webToggle}
-                setWebToggle={setWebToggle}
-                composerToggle={composerToggle}
-                setComposerToggle={setComposerToggle}
-                autonomousAgentToggle={autonomousAgentToggle}
-                setAutonomousAgentToggle={setAutonomousAgentToggle}
-                currentChain={currentChain}
-                onVaultToggleOff={handleVaultToggleOff}
-                onWebToggleOff={handleWebToggleOff}
-                onComposerToggleOff={handleComposerToggleOff}
-              />
-              <TooltipProvider delayDuration={0}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
+            <div className="tw-min-w-0 tw-flex-1">
+              <div className="tw-flex tw-items-center tw-gap-1">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
                     <Button
                       variant="ghost2"
                       size="fit"
-                      className="tw-text-muted hover:tw-text-accent"
-                      onClick={() => {
-                        new AddImageModal(app, onAddImage).open();
-                      }}
+                      className="tw-h-6 tw-rounded-full tw-bg-muted/30 tw-px-2 tw-text-xs tw-text-muted hover:tw-bg-muted/40"
                     >
-                      <Image className="tw-size-4" />
+                      {currentChain === ChainType.VAULT_QA_CHAIN ? (
+                        <Database className="tw-size-3.5" />
+                      ) : (
+                        <MessageSquare className="tw-size-3.5" />
+                      )}
+                      {currentChain === ChainType.VAULT_QA_CHAIN ? "vault" : "chat"}
+                      <ChevronDown className="tw-size-4" />
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent className="tw-px-1 tw-py-0.5">Add image(s)</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              {editMode && onEditCancel && (
-                <Button
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem onSelect={() => setCurrentChain(ChainType.LLM_CHAIN)}>
+                      <MessageSquare className="tw-mr-2 tw-size-3.5" />
+                      chat
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setCurrentChain(ChainType.VAULT_QA_CHAIN)}>
+                      <Database className="tw-mr-2 tw-size-3.5" />
+                      vault
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <ModelSelector
                   variant="ghost2"
                   size="fit"
-                  className="tw-text-muted"
-                  onClick={onEditCancel}
-                >
-                  <span>cancel</span>
-                </Button>
-              )}
-              <Button
-                variant="ghost2"
-                size="fit"
-                className="tw-text-muted"
-                onClick={() => onSendMessage()}
-              >
-                <CornerDownLeft className="!tw-size-3" />
-                <span>{editMode ? "save" : "chat"}</span>
-              </Button>
-            </>
+                  disabled={disableModelSwitch}
+                  value={getDisplayModelKey()}
+                  onChange={(modelKey) => {
+                    // In project mode, we don't update the global model key
+                    // as the project model takes precedence
+                    if (currentChain !== ChainType.PROJECT_CHAIN) {
+                      setCurrentModelKey(modelKey);
+                    }
+                  }}
+                  className="tw-max-w-full tw-truncate"
+                />
+              </div>
+            </div>
           )}
+
+          <div className="tw-flex tw-items-center tw-gap-1">
+            {isGenerating ? (
+              <Button
+                variant="default"
+                size="icon"
+                className="tw-size-6 tw-rounded-full"
+                onClick={() => onStopGenerating()}
+                title="Stop"
+                aria-label="Stop"
+              >
+                <StopCircle className="tw-size-4" />
+              </Button>
+            ) : (
+              <>
+                <ChatToolControls
+                  vaultToggle={vaultToggle}
+                  setVaultToggle={setVaultToggle}
+                  webToggle={webToggle}
+                  setWebToggle={setWebToggle}
+                  composerToggle={composerToggle}
+                  setComposerToggle={setComposerToggle}
+                  autonomousAgentToggle={autonomousAgentToggle}
+                  setAutonomousAgentToggle={setAutonomousAgentToggle}
+                  currentChain={currentChain}
+                  onVaultToggleOff={handleVaultToggleOff}
+                  onWebToggleOff={handleWebToggleOff}
+                  onComposerToggleOff={handleComposerToggleOff}
+                />
+                <TooltipProvider delayDuration={0}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost2"
+                        size="fit"
+                        className="tw-text-muted hover:tw-text-accent"
+                        onClick={() => {
+                          new AddImageModal(app, onAddImage).open();
+                        }}
+                      >
+                        <Image className="tw-size-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent className="tw-px-1 tw-py-0.5">Add image(s)</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TokenCounter tokenCount={latestTokenCount} />
+                {editMode && onEditCancel && (
+                  <Button
+                    variant="ghost2"
+                    size="fit"
+                    className="tw-text-muted"
+                    onClick={onEditCancel}
+                  >
+                    <span>cancel</span>
+                  </Button>
+                )}
+                <Button
+                  variant="default"
+                  size="icon"
+                  className="tw-size-6 tw-rounded-full"
+                  onClick={() => onSendMessage()}
+                >
+                  <ArrowUp className="tw-size-4" />
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

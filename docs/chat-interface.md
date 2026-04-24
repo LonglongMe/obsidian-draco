@@ -62,11 +62,9 @@ Each AI response has action buttons:
 
 ## Chat History
 
-### Autosave
+### Saving to your vault
 
-By default, Copilot automatically saves your conversations as markdown files in your vault. Each saved chat appears in the `copilot/copilot-conversations/` folder.
-
-You can turn off autosave in Settings → Basic. When you start a new chat, any unsaved conversation is saved automatically.
+Each conversation is written as a markdown note under your configured **Default Conversation Folder** (see Settings → Basic). Sending a message persists the thread on disk as part of the normal flow; use **Save Chat as Note** in the chat toolbar anytime to flush the current transcript to the note without waiting.
 
 ### Chat File Name Format
 
@@ -134,18 +132,15 @@ Copilot can display a list of notes related to your currently active note in the
 
 Enable in **Settings → Copilot → Basic → Relevant Notes** (on by default).
 
-## Saving a Chat Manually
+## Save Chat as Note
 
-If autosave is off, or you want to save mid-conversation, click the **Save Chat as Note** button above the chat input box. This saves the current conversation to your configured save folder.
+Click **Save Chat as Note** in the chat toolbar to write the current conversation to your configured save folder (useful to force a flush or after edits).
 
 ---
 
 ## New Chat Behavior
 
-Click the **pencil/new chat icon** to start a fresh conversation. This:
-1. Saves the current conversation (if autosave is enabled)
-2. Clears the chat window
-3. Resets the context to your currently active note
+Click the **pencil/new chat icon** to start a fresh conversation. This clears the chat window and resets context to your currently active note (use **Save Chat as Note** first if you still need the previous thread written to disk).
 
 You can also use the command palette: **New Copilot Chat**.
 

@@ -194,12 +194,12 @@ export const ProjectList = memo(
       }
     }, [hasMessages]);
 
-    // Sort projects based on sort strategy
+    // Sort projects using fixed "recent" strategy
     // Note: projectUsageRevision triggers re-sort when in-memory timestamps change,
     // even though it's not directly referenced in the callback
     const sortedProjects = useMemo(
       () =>
-        sortByStrategy(projects, settings.projectListSortStrategy, {
+        sortByStrategy(projects, "recent", {
           getName: (project) => project.name,
           getCreatedAtMs: (project) => project.created,
           getLastUsedAtMs: (project) => {
@@ -214,12 +214,7 @@ export const ProjectList = memo(
           },
         }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- projectUsageRevision triggers re-sort when manager's in-memory state changes
-      [
-        projects,
-        settings.projectListSortStrategy,
-        projectUsageTimestampsManager,
-        projectUsageRevision,
-      ]
+      [projects, projectUsageTimestampsManager, projectUsageRevision]
     );
 
     // Filter projects based on search query

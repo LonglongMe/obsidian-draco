@@ -5,6 +5,7 @@ import { err2String, formatDateTime } from "./utils";
 import { logError } from "@/logger";
 import { v4 as uuidv4 } from "uuid";
 import { formatErrorChunk } from "@/utils/toolResultUtils";
+import { flushRecordedPromptPayloadToDebugFile } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
 
 export type Role = "assistant" | "user" | "system";
 
@@ -24,13 +25,14 @@ export const getAIResponse = async (
   const abortController = new AbortController();
   updateShouldAbort(abortController);
   try {
-    await chainManager.runChain(
+    const aiResponse = await chainManager.runChain(
       userMessage,
       abortController,
       updateCurrentAiMessage,
       addMessage,
       options
     );
+    await flushRecordedPromptPayloadToDebugFile(aiResponse);
   } catch (error) {
     logError("Model request failed:", error);
     const errorMessage = formatErrorChunk("Model request failed: " + err2String(error));

@@ -1,10 +1,39 @@
 import { formatDateTime } from "@/utils";
 import { TFile } from "obsidian";
 
+/** Sidebar / history list title length from the first user turn (Unicode code points). */
+export const CHAT_UI_TITLE_CHAR_COUNT = 10;
+
+/**
+ * Build list UI title from saved chat body (after frontmatter is stripped):
+ * first **user** block → plain one line → first `maxChars` code points.
+ * Returns null if there is no user message yet.
+ */
+export function formatChatUiTitleFromBodyWithoutFrontmatter(
+  bodyWithoutFrontmatter: string,
+  maxChars = CHAT_UI_TITLE_CHAR_COUNT
+): string | null {
+  const firstUserMatch = bodyWithoutFrontmatter.match(
+    /\*\*user\*\*:\s*([\s\S]*?)(?=\n\*\*(?:user|ai)\*\*:|$)/i
+  );
+  const raw = firstUserMatch?.[1]?.trim() ?? "";
+  if (!raw) return null;
+  const oneLine = raw
+    .replace(/\[Timestamp:[^\]]*\]/gi, "")
+    .replace(/\!\[[^\]]*\]\([^)]+\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!oneLine) return null;
+  const chars = [...oneLine];
+  if (chars.length <= maxChars) return oneLine;
+  return chars.slice(0, maxChars).join("");
+}
+
 /**
  * Extract chat title from a file.
- * First checks frontmatter.topic, then extracts from filename by removing
- * project ID prefix, date/time patterns, and normalizing separators.
+ * First checks frontmatter.topic, then falls back to filename-based identifier.
  */
 export function extractChatTitle(file: TFile): string {
   // Read the file's front matter
@@ -15,17 +44,8 @@ export function extractChatTitle(file: TFile): string {
     return frontmatter.topic.trim();
   }
 
-  // Fallback to extracting from filename
-  // First, remove project ID prefix if it exists (format: projectId__)
-  const basename = file.basename.replace(/^[a-zA-Z0-9-]+__/, "");
-
-  // Remove {$date} and {$time} parts from the filename
-  return basename
-    .replace(/\{\$date\}|\d{8}/g, "") // Remove {$date} or date in format YYYYMMDD
-    .replace(/\{\$time\}|\d{6}/g, "") // Remove {$time} or time in format HHMMSS
-    .replace(/[@_]/g, " ") // Replace @ and _ with spaces
-    .replace(/\s+/g, " ") // Replace multiple spaces with single space
-    .trim();
+  // Fallback to stable filename identifier (conversationId-based).
+  return file.basename.trim();
 }
 
 /**
@@ -78,6 +98,48 @@ export function extractChatLastAccessedAtMs(file: TFile): number | null {
 export function extractChatLastAccessedAt(file: TFile): Date | null {
   const lastAccessedAtMs = extractChatLastAccessedAtMs(file);
   return lastAccessedAtMs ? new Date(lastAccessedAtMs) : null;
+}
+
+/**
+ * Extract project ID from chat frontmatter.
+ */
+export function extractChatProjectId(file: TFile): string | null {
+  const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
+  if (typeof frontmatter?.projectId === "string" && frontmatter.projectId.trim()) {
+    return frontmatter.projectId.trim();
+  }
+  return null;
+}
+
+/**
+ * Extract project name from chat frontmatter.
+ */
+export function extractChatProjectName(file: TFile): string | null {
+  const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
+  if (typeof frontmatter?.projectName === "string" && frontmatter.projectName.trim()) {
+    return frontmatter.projectName.trim();
+  }
+  return null;
+}
+
+/**
+ * Extract pinned flag from chat frontmatter.
+ */
+export function extractChatPinned(file: TFile): boolean {
+  const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
+  const raw = frontmatter?.pinned;
+  return raw === true || raw === "true";
+}
+
+/**
+ * Extract stable conversation ID from chat frontmatter.
+ */
+export function extractChatConversationId(file: TFile): string | null {
+  const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
+  if (typeof frontmatter?.conversationId === "string" && frontmatter.conversationId.trim()) {
+    return frontmatter.conversationId.trim();
+  }
+  return null;
 }
 
 /**

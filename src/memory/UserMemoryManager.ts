@@ -2,6 +2,7 @@ import { App, TFile } from "obsidian";
 import { ChatMessage } from "@/types/message";
 import { logInfo, logError, logWarn } from "@/logger";
 import { getSettings } from "@/settings/model";
+import { getCurrentProject } from "@/aiParams";
 import { ensureFolderExists } from "@/utils";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
@@ -59,10 +60,15 @@ export class UserMemoryManager {
    */
   addRecentConversation(messages: ChatMessage[], chatModel?: BaseChatModel): void {
     const settings = getSettings();
+    const currentProject = getCurrentProject();
 
     // Only proceed if memory is enabled
     if (!settings.enableRecentConversations) {
       logWarn("[UserMemoryManager] Recent history referencing is disabled, skipping analysis");
+      return;
+    }
+    if (!currentProject) {
+      logInfo("[UserMemoryManager] No active project, skipping recent conversation memory update");
       return;
     }
 
@@ -122,10 +128,11 @@ export class UserMemoryManager {
 
     try {
       const settings = getSettings();
+      const currentProject = getCurrentProject();
       let memoryPrompt = "";
 
       // Add recent conversations if enabled
-      if (settings.enableRecentConversations && this.recentConversationsContent) {
+      if (settings.enableRecentConversations && currentProject && this.recentConversationsContent) {
         memoryPrompt += `<recent_conversations>
         ${this.recentConversationsContent}
         </recent_conversations>

@@ -84,6 +84,7 @@ const selectedTextContextsAtom = atom<SelectedTextContext[]>([]);
 export interface ProjectConfig {
   id: string;
   name: string;
+  pinned?: boolean;
   description?: string;
   systemPrompt: string;
   projectModelKey: string;

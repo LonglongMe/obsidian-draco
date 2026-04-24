@@ -1,16 +1,12 @@
 import { getCurrentProject, ProjectConfig } from "@/aiParams";
-import { AI_SENDER, USER_SENDER } from "@/constants";
+import { AI_SENDER, DEFAULT_CHAT_HISTORY_FOLDER, USER_SENDER } from "@/constants";
 import ChainManager from "@/LLMProviders/chainManager";
 import { parseReasoningBlock } from "@/LLMProviders/chainRunner/utils/AgentReasoningState";
 import { logError, logInfo, logWarn } from "@/logger";
-import { getSettings } from "@/settings/model";
 import { ChatMessage } from "@/types/message";
 import {
   ensureFolderExists,
   extractTextFromChunk,
-  formatDateTime,
-  getUtf8ByteLength,
-  truncateToByteLimit,
 } from "@/utils";
 import {
   isInVaultCache,
@@ -20,8 +16,20 @@ import {
 } from "@/utils/vaultAdapterUtils";
 import { App, Notice, TFile } from "obsidian";
 import { MessageRepository } from "./MessageRepository";
+import { v4 as uuidv4 } from "uuid";
 
-const SAFE_FILENAME_BYTE_LIMIT = 100;
+interface SaveChatOptions {
+  silent?: boolean;
+  skipTopicGeneration?: boolean;
+  conversationId?: string;
+  /** When set, persist this snapshot instead of reading the live message repository (avoids cross-conversation races). */
+  messages?: ChatMessage[];
+  /**
+   * When set (including `null`), overrides getCurrentProject() for projectId/projectName in new note frontmatter.
+   * Omit to use the global current project atom.
+   */
+  projectForFrontmatter?: ProjectConfig | null;
+}
 
 /**
  * Escape a string for safe YAML double-quoted string value
@@ -41,6 +49,8 @@ function escapeYamlString(str: string): string {
  * - Formatting chat content for storage
  */
 export class ChatPersistenceManager {
+  private currentConversationId: string | null = null;
+
   constructor(
     private app: App,
     private messageRepo: MessageRepository,
@@ -50,29 +60,53 @@ export class ChatPersistenceManager {
   /**
    * Save current chat history to a markdown file
    */
-  async saveChat(modelKey: string): Promise<void> {
+  async saveChat(modelKey: string, options: SaveChatOptions = {}): Promise<void> {
+    const {
+      silent = false,
+      skipTopicGeneration = false,
+      conversationId: preferredConversationId,
+      messages: messagesOverride,
+    } = options;
     try {
-      const messages = this.messageRepo.getDisplayMessages();
+      const messages =
+        messagesOverride && messagesOverride.length > 0
+          ? messagesOverride
+          : this.messageRepo.getDisplayMessages();
       if (messages.length === 0) {
-        new Notice("No messages to save.");
+        if (!silent) {
+          new Notice("No messages to save.");
+        }
         return;
       }
 
-      const settings = getSettings();
       const chatContent = this.formatChatContent(messages);
       const firstMessageEpoch = messages[0].timestamp?.epoch || Date.now();
 
       // Ensure the save folder exists (supports nested paths) using utility helper.
-      await ensureFolderExists(settings.defaultSaveFolder);
+      await ensureFolderExists(DEFAULT_CHAT_HISTORY_FOLDER);
 
-      // Check if a file with this epoch already exists
-      const existingFile = await this.findFileByEpoch(firstMessageEpoch);
+      // Prefer explicit conversationId, then bound id, then legacy epoch (epoch can collide across chats).
+      let existingFile: TFile | null = null;
+      const preferred = preferredConversationId?.trim();
+      if (preferred) {
+        existingFile = await this.findFileByConversationId(preferred);
+      }
+      if (!existingFile && this.currentConversationId?.trim()) {
+        existingFile = await this.findFileByConversationId(this.currentConversationId.trim());
+      }
+      if (!existingFile) {
+        existingFile = await this.findFileByEpoch(firstMessageEpoch);
+      }
       const existingFrontmatter = existingFile
         ? this.app.metadataCache.getFileCache(existingFile)?.frontmatter
         : undefined;
 
       let existingTopic: string | undefined = existingFrontmatter?.topic;
       let existingLastAccessedAt: number | undefined = existingFrontmatter?.lastAccessedAt;
+      let existingConversationId: string | undefined =
+        typeof existingFrontmatter?.conversationId === "string"
+          ? existingFrontmatter.conversationId.trim()
+          : undefined;
 
       // For hidden directory files, metadataCache returns null — read frontmatter via adapter
       if (existingFile && !existingFrontmatter) {
@@ -81,22 +115,34 @@ export class ChatPersistenceManager {
           if (adapterFm) {
             if (adapterFm.topic) existingTopic = adapterFm.topic;
             if (adapterFm.lastAccessedAt) existingLastAccessedAt = Number(adapterFm.lastAccessedAt);
+            if (typeof adapterFm.conversationId === "string" && adapterFm.conversationId.trim()) {
+              existingConversationId = adapterFm.conversationId.trim();
+            }
           }
         } catch {
           // Ignore — proceed without preserved frontmatter
         }
       }
 
-      const currentProject = getCurrentProject();
+      const projectForNote =
+        options.projectForFrontmatter !== undefined ? options.projectForFrontmatter : getCurrentProject();
+      const conversationId =
+        preferredConversationId ||
+        this.currentConversationId ||
+        existingConversationId ||
+        this.createConversationId();
+      this.currentConversationId = conversationId;
 
       const preferredFileName = existingFile
         ? existingFile.path
-        : this.generateFileName(currentProject, messages, firstMessageEpoch, existingTopic);
+        : this.generateFileName(conversationId);
 
       const noteContent = this.generateNoteContent(
         chatContent,
         firstMessageEpoch,
         modelKey,
+        conversationId,
+        projectForNote,
         existingTopic,
         existingLastAccessedAt
       );
@@ -118,7 +164,9 @@ export class ChatPersistenceManager {
         // This happens when the save folder is a hidden directory (path starting with '.')
         // because Obsidian's metadata cache does not index hidden paths.
         await this.app.vault.adapter.write(preferredFileName, noteContent);
-        new Notice("Existing chat note found - updating it now.");
+        if (!silent) {
+          new Notice("Existing chat note found - updating it now.");
+        }
         logInfo(
           `[ChatPersistenceManager] Updated existing chat file via adapter: ${preferredFileName}`
         );
@@ -126,7 +174,9 @@ export class ChatPersistenceManager {
         // File doesn't exist, create a new one
         try {
           targetFile = await this.app.vault.create(preferredFileName, noteContent);
-          new Notice(`Chat saved as note: ${preferredFileName}`);
+          if (!silent) {
+            new Notice(`Chat saved as note: ${preferredFileName}`);
+          }
           logInfo(`[ChatPersistenceManager] Created new chat file: ${preferredFileName}`);
         } catch (error) {
           if (this.isFileAlreadyExistsError(error)) {
@@ -143,31 +193,38 @@ export class ChatPersistenceManager {
                 chatContent,
                 firstMessageEpoch,
                 modelKey,
+                conversationId,
+                projectForNote,
                 existingTopic,
                 conflictLastAccessedAt
               );
               await this.app.vault.modify(conflictFile, updatedContent);
               targetFile = conflictFile;
-              new Notice("Existing chat note found - updating it now.");
+              if (!silent) {
+                new Notice("Existing chat note found - updating it now.");
+              }
               logInfo(
                 `[ChatPersistenceManager] Resolved save conflict by updating existing chat file: ${conflictFile.path}`
               );
             } else {
               // File exists on disk but not in vault cache (hidden directory)
               await this.app.vault.adapter.write(preferredFileName, noteContent);
-              new Notice("Existing chat note found - updating it now.");
+              if (!silent) {
+                new Notice("Existing chat note found - updating it now.");
+              }
               logInfo(
                 `[ChatPersistenceManager] Resolved save conflict via adapter: ${preferredFileName}`
               );
             }
           } else if (this.isNameTooLongError(error)) {
-            // Single fallback: minimal guaranteed-to-work filename with project prefix
-            const filePrefix = currentProject ? `${currentProject.id}__` : "";
-            const fallbackName = `${settings.defaultSaveFolder}/${filePrefix}chat-${firstMessageEpoch}.md`;
+            // Single fallback: minimal guaranteed-to-work filename with fixed id
+            const fallbackName = `${DEFAULT_CHAT_HISTORY_FOLDER}/${conversationId.slice(0, 8)}.md`;
 
             try {
               targetFile = await this.app.vault.create(fallbackName, noteContent);
-              new Notice(`Chat saved as note: ${fallbackName}`);
+              if (!silent) {
+                new Notice(`Chat saved as note: ${fallbackName}`);
+              }
               logWarn(
                 `[ChatPersistenceManager] Used minimal filename due to length constraints: ${fallbackName}`
               );
@@ -186,19 +243,25 @@ export class ChatPersistenceManager {
                     chatContent,
                     firstMessageEpoch,
                     modelKey,
+                    conversationId,
+                    projectForNote,
                     conflictTopic,
                     conflictLastAccessedAt
                   );
                   await this.app.vault.modify(conflictFile, updatedContent);
                   targetFile = conflictFile;
-                  new Notice("Existing chat note found - updating it now.");
+                  if (!silent) {
+                    new Notice("Existing chat note found - updating it now.");
+                  }
                   logInfo(
                     `[ChatPersistenceManager] Resolved fallback save conflict by updating existing chat file: ${conflictFile.path}`
                   );
                 } else {
                   // File exists on disk but not in vault cache (hidden directory)
                   await this.app.vault.adapter.write(fallbackName, noteContent);
-                  new Notice("Existing chat note found - updating it now.");
+                  if (!silent) {
+                    new Notice("Existing chat note found - updating it now.");
+                  }
                   logInfo(
                     `[ChatPersistenceManager] Resolved fallback save conflict via adapter: ${fallbackName}`
                   );
@@ -213,10 +276,14 @@ export class ChatPersistenceManager {
         }
       }
 
-      this.generateTopicAsyncIfNeeded(currentProject, targetFile, messages, existingTopic);
+      if (!skipTopicGeneration) {
+        await this.generateTopicIfNeeded(targetFile, messages, existingTopic);
+      }
     } catch (error) {
       logError("[ChatPersistenceManager] Error saving chat:", error);
-      new Notice("Failed to save chat as note. Check console for details.");
+      if (!silent) {
+        new Notice("Failed to save chat as note. Check console for details.");
+      }
     }
   }
 
@@ -225,6 +292,32 @@ export class ChatPersistenceManager {
    */
   async loadChat(file: TFile): Promise<ChatMessage[]> {
     try {
+      let loadedConversationId =
+        this.app.metadataCache.getFileCache(file)?.frontmatter?.conversationId ?? null;
+      if (!loadedConversationId) {
+        try {
+          const adapterFm = await readFrontmatterViaAdapter(this.app, file.path);
+          loadedConversationId =
+            typeof adapterFm?.conversationId === "string" ? adapterFm.conversationId : null;
+        } catch {
+          // Ignore and try basename fallback below.
+        }
+      }
+      // Stable chat files are named `{conversationId}.md`; if frontmatter is unread (cache/hidden
+      // path timing), synthesizing a random id would fork lineage and the next save creates a new file.
+      if (!loadedConversationId || !String(loadedConversationId).trim()) {
+        const base = file.basename?.trim();
+        if (base) {
+          loadedConversationId = base;
+        }
+      }
+      const normalizedConversationId =
+        typeof loadedConversationId === "string" && loadedConversationId.trim()
+          ? loadedConversationId.trim()
+          : this.createConversationId();
+      this.currentConversationId = normalizedConversationId;
+      await this.ensureConversationIdOnFile(file, normalizedConversationId);
+
       let content: string;
       try {
         content = await this.app.vault.read(file);
@@ -243,11 +336,24 @@ export class ChatPersistenceManager {
   }
 
   /**
+   * Reset active conversation binding so next save starts a new chat file lineage.
+   */
+  resetCurrentConversation(): void {
+    this.currentConversationId = null;
+  }
+
+  /**
+   * Get currently bound conversationId for the active save lineage.
+   */
+  getCurrentConversationId(): string | null {
+    return this.currentConversationId;
+  }
+
+  /**
    * Get all chat history files from the vault
    */
   async getChatHistoryFiles(): Promise<TFile[]> {
-    const settings = getSettings();
-    const folderFiles = await listMarkdownFiles(this.app, settings.defaultSaveFolder);
+    const folderFiles = await listMarkdownFiles(this.app, DEFAULT_CHAT_HISTORY_FOLDER);
     if (folderFiles.length === 0) return [];
 
     // Get current project ID if in a project
@@ -255,12 +361,15 @@ export class ChatPersistenceManager {
 
     // Filter files based on project context
     return folderFiles.filter((file) => {
+      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      const fileProjectId =
+        typeof frontmatter?.projectId === "string" && frontmatter.projectId.trim()
+          ? frontmatter.projectId.trim()
+          : null;
       if (currentProject) {
-        // In project mode, only show files for this project
-        return file.basename.startsWith(`${currentProject.id}__`);
+        return fileProjectId === currentProject.id;
       } else {
-        // In non-project mode, only show files without project prefix
-        return !file.basename.includes("__") || !file.basename.split("__")[0];
+        return fileProjectId === null;
       }
     });
   }
@@ -614,101 +723,10 @@ ${conversationSummary}`;
   }
 
   /**
-   * Generate a file name for the chat.
-   * @param project - The project context for the filename prefix.
-   * @param messages - The conversation messages used to derive the topic.
-   * @param firstMessageEpoch - Epoch timestamp of the first message in the chat.
-   * @param topic - Optional pre-computed topic to use for the filename.
+   * Generate a stable file name for the chat using conversation ID only.
    */
-  private generateFileName(
-    project: ProjectConfig | null,
-    messages: ChatMessage[],
-    firstMessageEpoch: number,
-    topic?: string
-  ): string {
-    const settings = getSettings();
-    const formattedDateTime = formatDateTime(new Date(firstMessageEpoch));
-    const timestampFileName = formattedDateTime.fileName;
-
-    // Use the provided topic or fall back to the first 10 words
-    let topicForFilename: string;
-    if (topic) {
-      topicForFilename = topic;
-    } else {
-      // Get the first user message
-      const firstUserMessage = messages.find((message) => message.sender === USER_SENDER);
-
-      // Get the first 10 words from the first user message and sanitize them
-      topicForFilename = firstUserMessage
-        ? firstUserMessage.message
-            // Remove Obsidian wiki link brackets while preserving inner text: [[Title]] -> Title
-            .replace(/\[\[([^\]]+)\]\]/g, "$1")
-            // Remove any remaining square brackets or braces
-            .replace(/[{}[\]]/g, "")
-            // Now split to first 10 words
-            .split(/\s+/)
-            .slice(0, 10)
-            .join(" ")
-            // Remove invalid filename characters (including control chars)
-            // eslint-disable-next-line no-control-regex
-            .replace(/[\\/:*?"<>|\x00-\x1F]/g, "")
-            .trim() || "Untitled Chat"
-        : "Untitled Chat";
-    }
-
-    // Parse the custom format and replace variables
-    let customFileName = settings.defaultConversationNoteName || "{$date}_{$time}__{$topic}";
-
-    // Prefix from an input project, global project, or empty if none
-    const currentProject = project === undefined ? getCurrentProject() : project;
-    const filePrefix = currentProject ? `${currentProject.id}__` : "";
-
-    // Calculate fixed components in bytes
-    const extensionBytes = getUtf8ByteLength(".md");
-    const filePrefixBytes = getUtf8ByteLength(filePrefix);
-
-    // Calculate the custom format overhead (everything except {$topic})
-    const formatOverhead = customFileName
-      .replace("{$topic}", "")
-      .replace("{$date}", timestampFileName.split("_")[0])
-      .replace("{$time}", timestampFileName.split("_")[1]);
-    const formatOverheadBytes = getUtf8ByteLength(formatOverhead);
-
-    // Calculate the maximum bytes available for the topic
-    const topicByteBudget = Math.max(
-      20, // Minimum 20 bytes for topic to ensure at least some meaningful text
-      SAFE_FILENAME_BYTE_LIMIT - extensionBytes - filePrefixBytes - formatOverheadBytes
-    );
-
-    // Replace spaces with underscores and truncate to byte limit
-    const topicWithUnderscores = topicForFilename.replace(/\s+/g, "_");
-    const truncatedTopic = truncateToByteLimit(topicWithUnderscores, topicByteBudget);
-
-    // Create the file name with the truncated topic
-    customFileName = customFileName
-      .replace("{$topic}", truncatedTopic)
-      .replace("{$date}", timestampFileName.split("_")[0])
-      .replace("{$time}", timestampFileName.split("_")[1]);
-
-    // Sanitize the final filename (replace any illegal chars with underscore)
-    // Also remove leftover square brackets which are illegal on some platforms
-    // eslint-disable-next-line no-control-regex
-    const sanitizedFileName = customFileName
-      .replace(/\[\[([^\]]+)\]\]/g, "$1")
-      .replace(/[{}[\]]/g, "_")
-      // eslint-disable-next-line no-control-regex
-      .replace(/[\\/:*?"<>|\x00-\x1F]/g, "_");
-
-    // Final safety check: ensure the complete basename fits within the limit
-    const baseNameWithPrefix = `${filePrefix}${sanitizedFileName}.md`;
-    if (getUtf8ByteLength(baseNameWithPrefix) > SAFE_FILENAME_BYTE_LIMIT) {
-      // If still too long, truncate the entire filename more aggressively
-      const availableForBasename = SAFE_FILENAME_BYTE_LIMIT - extensionBytes - filePrefixBytes;
-      const truncatedBasename = truncateToByteLimit(sanitizedFileName, availableForBasename);
-      return `${settings.defaultSaveFolder}/${filePrefix}${truncatedBasename}.md`;
-    }
-
-    return `${settings.defaultSaveFolder}/${baseNameWithPrefix}`;
+  private generateFileName(conversationId: string): string {
+    return `${DEFAULT_CHAT_HISTORY_FOLDER}/${conversationId}.md`;
   }
 
   /**
@@ -718,53 +736,83 @@ ${conversationSummary}`;
     chatContent: string,
     firstMessageEpoch: number,
     modelKey: string,
+    conversationId: string,
+    project: ProjectConfig | null,
     topic?: string,
     lastAccessedAt?: number
   ): string {
-    const settings = getSettings();
-    const currentProject = getCurrentProject();
-
     return `---
 epoch: ${firstMessageEpoch}
 modelKey: "${escapeYamlString(modelKey)}"
+conversationId: "${escapeYamlString(conversationId)}"
 ${topic ? `topic: "${topic}"` : ""}
 ${lastAccessedAt ? `lastAccessedAt: ${lastAccessedAt}` : ""}
-${currentProject ? `projectId: ${currentProject.id}` : ""}
-${currentProject ? `projectName: ${currentProject.name}` : ""}
+${project ? `projectId: ${project.id}` : ""}
+${project ? `projectName: ${project.name}` : ""}
 tags:
-  - ${settings.defaultConversationTag}
+  - copilot-conversation
 ---
 
 ${chatContent}`;
   }
 
   /**
-   * Trigger asynchronous topic generation and apply it to the saved note once available
+   * Generate a unique conversation ID for durable chat identity.
    */
-  private generateTopicAsyncIfNeeded(
-    project: ProjectConfig | null,
+  private createConversationId(): string {
+    return uuidv4();
+  }
+
+  /**
+   * Ensure a chat file has a conversationId frontmatter key.
+   */
+  private async ensureConversationIdOnFile(file: TFile, conversationId: string): Promise<void> {
+    try {
+      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      if (typeof frontmatter?.conversationId === "string" && frontmatter.conversationId.trim()) {
+        return;
+      }
+      await patchFrontmatter(this.app, file.path, { conversationId });
+    } catch (error) {
+      logWarn(`[ChatPersistenceManager] Failed to backfill conversationId for ${file.path}`, error);
+    }
+  }
+
+  /**
+   * Find a file by conversationId in frontmatter.
+   */
+  private async findFileByConversationId(conversationId: string): Promise<TFile | null> {
+    const target = conversationId.trim();
+    if (!target) return null;
+    const files = await this.getChatHistoryFiles();
+    for (const file of files) {
+      let idValue: unknown =
+        this.app.metadataCache.getFileCache(file)?.frontmatter?.conversationId ?? undefined;
+      if (idValue === undefined) {
+        try {
+          const adapterFm = await readFrontmatterViaAdapter(this.app, file.path);
+          idValue = adapterFm?.conversationId;
+        } catch {
+          continue;
+        }
+      }
+      if (typeof idValue === "string" && idValue.trim() === target) {
+        return file;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Generate topic and write it into frontmatter.
+   */
+  private async generateTopicIfNeeded(
     file: TFile | null,
     messages: ChatMessage[],
     existingTopic?: string
-  ): void {
-    const settings = getSettings();
-
-    if (!settings.generateAIChatTitleOnSave || !file || existingTopic) {
-      return;
-    }
-
-    void (async () => {
-      try {
-        const topic = await this.generateAITopic(messages);
-        if (!topic) {
-          return;
-        }
-        await this.applyTopicToFrontmatter(file, topic);
-        await this.renameFileToMatchTopic(project, file, topic);
-      } catch (error) {
-        logError("[ChatPersistenceManager] Error during async topic generation:", error);
-      }
-    })();
+  ): Promise<void> {
+    // AI topic generation removed - no longer configured
+    return;
   }
 
   /**
@@ -805,46 +853,4 @@ ${chatContent}`;
     return message.toLowerCase().includes("already exists");
   }
 
-  /**
-   * Rename a note file to match its finalized frontmatter topic
-   */
-  async renameFileToMatchTopic(
-    project: ProjectConfig | null,
-    file: TFile,
-    topic: string
-  ): Promise<void> {
-    if (!file || !topic) return;
-
-    let epoch: number | undefined;
-
-    const cache = this.app.metadataCache.getFileCache(file);
-    if (cache?.frontmatter?.epoch) {
-      epoch = cache.frontmatter.epoch;
-    } else {
-      // Fallback for hidden-directory files
-      try {
-        const adapterFm = await readFrontmatterViaAdapter(this.app, file.path);
-        if (adapterFm?.epoch) {
-          epoch = Number(adapterFm.epoch);
-        }
-      } catch {
-        // Ignore
-      }
-    }
-
-    if (!epoch) {
-      return;
-    }
-
-    const messages = this.messageRepo.getDisplayMessages();
-    const newPath = this.generateFileName(project, messages, epoch, topic);
-
-    if (file.path === newPath) {
-      return;
-    }
-
-    await this.app.fileManager.renameFile(file, newPath);
-
-    return;
-  }
 }

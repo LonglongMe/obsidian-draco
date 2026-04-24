@@ -4,7 +4,6 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { ProviderSettingsKeyMap, SettingKeyProviders } from "@/constants";
 import { updateSetting, useSettingsValue } from "@/settings/model";
 import { GitHubCopilotAuth } from "@/settings/v2/components/GitHubCopilotAuth";
-import { LocalServicesSection } from "@/settings/v2/components/LocalServicesSection";
 import { ModelImporter } from "@/settings/v2/components/ModelImporter";
 import { getNeedSetKeyProvider, getProviderInfo, getProviderLabel } from "@/utils";
 import { ChevronDown, ChevronRight, ChevronUp, Info } from "lucide-react";
@@ -130,9 +129,6 @@ function ApiKeyModalContent({ onClose, onGoToModelTab }: ApiKeyModalContentProps
 
         {/* GitHub Copilot Section */}
         <GitHubCopilotAuth />
-
-        {/* Local Services Section */}
-        <LocalServicesSection />
 
         {/* Advanced configuration guide */}
         {onGoToModelTab && (

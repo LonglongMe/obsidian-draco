@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { SettingItem } from "@/components/ui/setting-item";
+import { SettingsGroup } from "@/components/ui/settings-group";
 import { ObsidianNativeSelect } from "@/components/ui/obsidian-native-select";
 import { logFileManager } from "@/logFileManager";
 import { flushRecordedPromptPayloadToLog } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
@@ -13,12 +14,10 @@ export const AdvancedSettings: React.FC = () => {
   const settings = useSettingsValue();
   const prompts = useSystemPrompts();
 
-  // Check if the default system prompt exists in the current prompts list
   const defaultPromptExists = prompts.some(
     (prompt) => prompt.title === settings.defaultSystemPromptTitle
   );
 
-  // Display value: use the default prompt if it exists, otherwise empty string (will show placeholder)
   const displayValue = defaultPromptExists ? settings.defaultSystemPromptTitle : "";
 
   const handleSelectChange = (value: string) => {
@@ -28,7 +27,6 @@ export const AdvancedSettings: React.FC = () => {
   const handleOpenSourceFile = () => {
     if (!displayValue) return;
     const filePath = getPromptFilePath(displayValue);
-    // Close the settings modal before opening the file
     (app as any).setting.close();
     app.workspace.openLinkText(filePath, "", true);
   };
@@ -39,15 +37,13 @@ export const AdvancedSettings: React.FC = () => {
   };
 
   return (
-    <div className="tw-space-y-4">
-      {/* User System Prompt Section */}
-      <section className="tw-space-y-4 tw-rounded-lg tw-border tw-p-4">
-        <h3 className="tw-text-lg tw-font-semibold">User System Prompt</h3>
-
+    <div className="tw-py-2">
+      {/* System Prompts Group */}
+      <SettingsGroup title="System Prompts">
         <SettingItem
           type="custom"
           title="Default System Prompt"
-          description="Customize the system prompt for all messages, may result in unexpected behavior!"
+          description="Customize the system prompt for all messages"
         >
           <div className="tw-flex tw-items-center tw-gap-2">
             <ObsidianNativeSelect
@@ -69,13 +65,19 @@ export const AdvancedSettings: React.FC = () => {
               variant="ghost"
               size="icon"
               onClick={handleOpenSourceFile}
-              className="tw-size-5 tw-shrink-0 tw-p-0"
+              className="tw-size-8 tw-shrink-0 tw-p-0"
               title="Open the source file"
               disabled={!displayValue}
             >
-              <ArrowUpRight className="tw-size-5" />
+              <ArrowUpRight className="tw-size-4" />
             </Button>
-            <Button variant="default" size="icon" onClick={handleAddPrompt} title="Add new prompt">
+            <Button
+              variant="default"
+              size="icon"
+              onClick={handleAddPrompt}
+              title="Add new prompt"
+              className="tw-size-8"
+            >
               <Plus className="tw-size-4" />
             </Button>
           </div>
@@ -84,21 +86,19 @@ export const AdvancedSettings: React.FC = () => {
         <SettingItem
           type="text"
           title="System Prompts Folder Name"
-          description="Folder where system prompts are stored."
+          description="Folder where system prompts are stored"
           value={settings.userSystemPromptsFolder}
           onChange={(value) => updateSetting("userSystemPromptsFolder", value)}
           placeholder="copilot/system-prompts"
         />
-      </section>
+      </SettingsGroup>
 
-      {/* Others Section */}
-      <section className="tw-space-y-4 tw-rounded-lg tw-border tw-p-4">
-        <h3 className="tw-text-lg tw-font-semibold">Others</h3>
-
+      {/* Debug & Logs Group */}
+      <SettingsGroup title="Debug & Logs">
         <SettingItem
           type="switch"
           title="Enable Encryption"
-          description="Enable encryption for the API keys."
+          description="Enable encryption for the API keys"
           checked={settings.enableEncryption}
           onCheckedChange={(checked) => {
             updateSetting("enableEncryption", checked);
@@ -108,7 +108,7 @@ export const AdvancedSettings: React.FC = () => {
         <SettingItem
           type="switch"
           title="Debug Mode"
-          description="Debug mode will log some debug message to the console."
+          description="Log debug messages to the console"
           checked={settings.debug}
           onCheckedChange={(checked) => {
             updateSetting("debug", checked);
@@ -118,7 +118,7 @@ export const AdvancedSettings: React.FC = () => {
         <SettingItem
           type="custom"
           title="Create Log File"
-          description={`Open the Copilot log file (${logFileManager.getLogPath()}) for easy sharing when reporting issues.`}
+          description={`Open the Copilot log file (${logFileManager.getLogPath()}) for reporting issues`}
         >
           <Button
             variant="secondary"
@@ -132,7 +132,7 @@ export const AdvancedSettings: React.FC = () => {
             Create Log File
           </Button>
         </SettingItem>
-      </section>
+      </SettingsGroup>
     </div>
   );
 };

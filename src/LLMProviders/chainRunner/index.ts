@@ -3,9 +3,7 @@ export type { ChainRunner } from "./BaseChainRunner";
 export { BaseChainRunner } from "./BaseChainRunner";
 export { LLMChainRunner } from "./LLMChainRunner";
 export { VaultQAChainRunner } from "./VaultQAChainRunner";
-export { CopilotPlusChainRunner } from "./CopilotPlusChainRunner";
 export { ProjectChainRunner } from "./ProjectChainRunner";
-export { AutonomousAgentChainRunner } from "./AutonomousAgentChainRunner";
 
 // Utility exports (for internal use or testing)
 export { ThinkBlockStreamer } from "./utils/ThinkBlockStreamer";

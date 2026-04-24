@@ -2,8 +2,7 @@ import { CustomModel, ProjectConfig } from "@/aiParams";
 import { atom, createStore, useAtomValue } from "jotai";
 import { v4 as uuidv4 } from "uuid";
 
-import { type ChainType } from "@/chainFactory";
-import { type SortStrategy, isSortStrategy } from "@/utils/recentUsageManager";
+import { ChainType } from "@/chainFactory";
 import {
   AGENT_MAX_ITERATIONS_LIMIT,
   BUILTIN_CHAT_MODELS,
@@ -82,14 +81,6 @@ export interface CopilotSettings {
   openAIProxyBaseUrl: string;
   openAIEmbeddingProxyBaseUrl: string;
   stream: boolean;
-  defaultSaveFolder: string;
-  defaultConversationTag: string;
-  autosaveChat: boolean;
-  /**
-   * When enabled, generate a short AI title for chat notes on save.
-   * When disabled (default), use the first 10 words of the first user message.
-   */
-  generateAIChatTitleOnSave: boolean;
   autoAddActiveContentToContext: boolean;
   customPromptsFolder: string;
   indexVaultToVectorStore: string;
@@ -107,8 +98,6 @@ export interface CopilotSettings {
   activeEmbeddingModels: Array<CustomModel>;
   promptUsageTimestamps: Record<string, number>;
   promptSortStrategy: string;
-  chatHistorySortStrategy: SortStrategy;
-  projectListSortStrategy: SortStrategy;
   embeddingRequestsPerMin: number;
   embeddingBatchSize: number;
   defaultOpenArea: DEFAULT_OPEN_AREA;
@@ -117,7 +106,6 @@ export interface CopilotSettings {
   showSuggestedPrompts: boolean;
   showRelevantNotes: boolean;
   numPartitions: number;
-  defaultConversationNoteName: string;
   // undefined means never checked
   isPlusUser: boolean | undefined;
   inlineEditCommands: LegacyCommandSettings[] | undefined;
@@ -338,6 +326,11 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     settingsToSanitize.userId = uuidv4();
   }
 
+  // Migrated: removed "copilot_plus" chain; map to Chat
+  if ((settingsToSanitize.defaultChainType as string) === "copilot_plus") {
+    (settingsToSanitize as { defaultChainType: ChainType }).defaultChainType = ChainType.LLM_CHAIN;
+  }
+
   // fix: Maintain consistency between EmbeddingModelProviders.AZURE_OPENAI and ChatModelProviders.AZURE_OPENAI,
   // where it was 'azure_openai' before EmbeddingModelProviders.AZURE_OPENAI.
   if (!settingsToSanitize.activeEmbeddingModels) {
@@ -359,6 +352,7 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   delete sanitizedSettingsRecord.miyoRemoteVaultPath;
   delete sanitizedSettingsRecord.miyoVaultName;
   delete sanitizedSettingsRecord.enableMiyoSearch;
+  delete sanitizedSettingsRecord.autosaveChat;
 
   // Migration: Rename self-hosted search settings to self-host mode (v3.2.0+)
   if (
@@ -421,11 +415,6 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
       sanitizedSettings.autoAddActiveContentToContext =
         DEFAULT_SETTINGS.autoAddActiveContentToContext;
     }
-  }
-
-  // Ensure generateAIChatTitleOnSave has a default value
-  if (typeof sanitizedSettings.generateAIChatTitleOnSave !== "boolean") {
-    sanitizedSettings.generateAIChatTitleOnSave = DEFAULT_SETTINGS.generateAIChatTitleOnSave;
   }
 
   // Ensure enableMiyo has a default value
@@ -520,11 +509,6 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.maxRecentConversations = maxRecentConversations;
   }
 
-  // Ensure autosaveChat has a default value
-  if (typeof sanitizedSettings.autosaveChat !== "boolean") {
-    sanitizedSettings.autosaveChat = DEFAULT_SETTINGS.autosaveChat;
-  }
-
   // Ensure autoCompactThreshold has a valid value (64k-1M tokens range)
   const autoCompactThreshold = Number(settingsToSanitize.autoCompactThreshold);
   if (isNaN(autoCompactThreshold)) {
@@ -573,30 +557,9 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.defaultSendShortcut = DEFAULT_SETTINGS.defaultSendShortcut;
   }
 
-  // Ensure folder settings fall back to defaults when empty/whitespace
-  const saveFolder = (settingsToSanitize.defaultSaveFolder || "").trim();
-  sanitizedSettings.defaultSaveFolder =
-    saveFolder.length > 0 ? saveFolder : DEFAULT_SETTINGS.defaultSaveFolder;
-
   const promptsFolder = (settingsToSanitize.customPromptsFolder || "").trim();
   sanitizedSettings.customPromptsFolder =
     promptsFolder.length > 0 ? promptsFolder : DEFAULT_SETTINGS.customPromptsFolder;
-
-  // Ensure chatHistorySortStrategy has a valid value (exclude "manual" which is only for custom commands)
-  if (
-    !isSortStrategy(sanitizedSettings.chatHistorySortStrategy) ||
-    sanitizedSettings.chatHistorySortStrategy === "manual"
-  ) {
-    sanitizedSettings.chatHistorySortStrategy = DEFAULT_SETTINGS.chatHistorySortStrategy;
-  }
-
-  // Ensure projectListSortStrategy has a valid value (exclude "manual" which is only for custom commands)
-  if (
-    !isSortStrategy(sanitizedSettings.projectListSortStrategy) ||
-    sanitizedSettings.projectListSortStrategy === "manual"
-  ) {
-    sanitizedSettings.projectListSortStrategy = DEFAULT_SETTINGS.projectListSortStrategy;
-  }
 
   const userSystemPromptsFolder = (settingsToSanitize.userSystemPromptsFolder || "").trim();
   sanitizedSettings.userSystemPromptsFolder =

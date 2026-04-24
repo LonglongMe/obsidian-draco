@@ -1,8 +1,6 @@
 import { BREVILABS_API_BASE_URL } from "@/constants";
 import { getDecryptedKey } from "@/encryptionService";
-import { MissingPlusLicenseError } from "@/error";
 import { logInfo } from "@/logger";
-import { turnOffPlus, turnOnPlus } from "@/plusUtils";
 import { getSettings } from "@/settings/model";
 import { safeFetchNoThrow } from "@/utils";
 import { arrayBufferToBase64 } from "@/utils/base64";
@@ -85,11 +83,7 @@ export class BrevilabsClient {
   }
 
   private checkLicenseKey() {
-    if (!getSettings().plusLicenseKey) {
-      throw new MissingPlusLicenseError(
-        "Copilot Plus license key not found. Please enter your license key in the settings."
-      );
-    }
+    // DIY fork: optional Brevilabs key; do not throw—calls without a key may fail at the API.
   }
 
   setPluginVersion(pluginVersion: string) {
@@ -121,7 +115,10 @@ export class BrevilabsClient {
       "X-Client-Version": this.pluginVersion,
     };
     if (!excludeAuthHeader) {
-      headers.Authorization = `Bearer ${await getDecryptedKey(getSettings().plusLicenseKey)}`;
+      const token = await getDecryptedKey(getSettings().plusLicenseKey);
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
     }
     const response = await safeFetchNoThrow(url.toString(), {
       method,
@@ -158,14 +155,18 @@ export class BrevilabsClient {
 
     const url = new URL(`${BREVILABS_API_BASE_URL}${endpoint}`);
 
+    const token = await getDecryptedKey(getSettings().plusLicenseKey);
+    const formHeaders: Record<string, string> = {
+      "X-Client-Version": this.pluginVersion,
+    };
+    if (token) {
+      formHeaders.Authorization = `Bearer ${token}`;
+    }
+
     try {
       const response = await fetch(url.toString(), {
         method: "POST",
-        headers: {
-          // No Content-Type header - browser will set it automatically with boundary
-          Authorization: `Bearer ${await getDecryptedKey(getSettings().plusLicenseKey)}`,
-          "X-Client-Version": this.pluginVersion,
-        },
+        headers: formHeaders,
         body: formData,
       });
 
@@ -194,50 +195,10 @@ export class BrevilabsClient {
    * unknown error.
    */
   async validateLicenseKey(
-    context?: Record<string, any>
+    _context?: Record<string, any>
   ): Promise<{ isValid: boolean | undefined; plan?: string }> {
-    // Build the request body with proper structure
-    const requestBody: Record<string, any> = {
-      license_key: await getDecryptedKey(getSettings().plusLicenseKey),
-    };
-
-    // Safely spread context if provided, ensuring no conflicts with required fields
-    if (context && typeof context === "object") {
-      // Filter out any undefined or null values from context
-      const filteredContext = Object.fromEntries(
-        Object.entries(context).filter(([_, value]) => value !== undefined && value !== null)
-      );
-
-      // Remove any reserved fields that must not be overridden by context
-      const reservedKeys = new Set(["license_key", "user_id"]);
-      for (const key of reservedKeys) {
-        if (key in filteredContext) {
-          delete (filteredContext as Record<string, unknown>)[key];
-        }
-      }
-
-      // Spread the filtered context into the request body
-      Object.assign(requestBody, filteredContext);
-    }
-
-    const { data, error } = await this.makeRequest<LicenseResponse>(
-      "/license",
-      requestBody,
-      "POST",
-      true,
-      true
-    );
-
-    if (error) {
-      if (error.message === "Invalid license key") {
-        turnOffPlus();
-        return { isValid: false };
-      }
-      // Do nothing if the error is not about the invalid license key
-      return { isValid: undefined };
-    }
-    turnOnPlus();
-    return { isValid: true, plan: data?.plan };
+    // Commercial license check removed in DIY fork.
+    return { isValid: true, plan: "diy" };
   }
 
   async rerank(query: string, documents: string[]): Promise<RerankResponse> {

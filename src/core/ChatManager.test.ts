@@ -15,20 +15,22 @@ jest.mock("@/chatUtils", () => ({
 jest.mock("@/chainFactory", () => ({
   ChainType: {
     LLM_CHAIN: "llm_chain",
-    COPILOT_PLUS_CHAIN: "copilot_plus_chain",
+    VAULT_QA_CHAIN: "vault_qa",
     PROJECT_CHAIN: "project_chain",
   },
 }));
 
 jest.mock("./ChatPersistenceManager", () => ({
   ChatPersistenceManager: jest.fn().mockImplementation(() => ({
-    saveChat: jest.fn().mockResolvedValue({ success: true, path: "/test/path.md" }),
+    saveChat: jest.fn().mockResolvedValue(undefined),
+    resetCurrentConversation: jest.fn(),
+    getCurrentConversationId: jest.fn().mockReturnValue(null),
   })),
 }));
 
 jest.mock("@/aiParams", () => ({
   getCurrentProject: jest.fn().mockReturnValue(null),
-  getChainType: jest.fn().mockReturnValue("copilot_plus_chain"),
+  getChainType: jest.fn().mockReturnValue("llm_chain"),
 }));
 
 jest.mock("@/LLMProviders/projectManager", () => {
@@ -169,10 +171,12 @@ describe("ChatManager", () => {
       mockMessageRepo.getMessage.mockReturnValue(mockMessage);
       mockContextManager.processMessageContext.mockResolvedValue(createContextResult());
       mockMessageRepo.updateProcessedText.mockReturnValue(true);
+      mockMessageRepo.getDisplayMessages.mockReturnValue([mockMessage]);
 
       const result = await chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN);
 
-      expect(result).toBe("msg-1");
+      expect(result.messageId).toBe("msg-1");
+      expect(result.displayMessagesSnapshot).toEqual([mockMessage]);
       expect(mockMessageRepo.addMessage).toHaveBeenCalledWith(
         "Hello",
         "Hello",
@@ -247,10 +251,11 @@ describe("ChatManager", () => {
       mockMessageRepo.getMessage.mockReturnValue(mockMessage);
       mockContextManager.processMessageContext.mockResolvedValue(createContextResult());
       mockMessageRepo.updateProcessedText.mockReturnValue(true);
+      mockMessageRepo.getDisplayMessages.mockReturnValue([mockMessage]);
 
       const result = await chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN, true);
 
-      expect(result).toBe("msg-1");
+      expect(result.messageId).toBe("msg-1");
       // Should not include active note in context
       expect(mockMessageRepo.addMessage).toHaveBeenCalledWith(
         "Hello",
@@ -393,7 +398,7 @@ describe("ChatManager", () => {
         expect.anything(), // messageRepo
         expect.anything(), // fileParserManager
         undefined, // vault (undefined in mock)
-        "copilot_plus_chain", // chainType
+        "llm_chain", // chainType
         false, // includeActiveNote
         undefined, // activeNote
         "Test system prompt", // systemPrompt
@@ -1718,8 +1723,8 @@ describe("ChatManager", () => {
         mockContextManager.processMessageContext.mockResolvedValue(createContextResult());
 
         // Should not throw, should continue with original prompt
-        await expect(chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN)).resolves.toBe(
-          "msg-1"
+        await expect(chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN)).resolves.toMatchObject(
+          { messageId: "msg-1" }
         );
 
         // Verify contextManager was still called (chat continues)
@@ -1823,8 +1828,8 @@ describe("ChatManager", () => {
         mockContextManager.processMessageContext.mockResolvedValue(createContextResult());
 
         // Should not throw
-        await expect(chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN)).resolves.toBe(
-          "msg-1"
+        await expect(chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN)).resolves.toMatchObject(
+          { messageId: "msg-1" }
         );
 
         // Verify contextManager was called (chat continues)

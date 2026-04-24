@@ -1,3 +1,4 @@
+import type { ProjectConfig } from "@/aiParams";
 import { ChainType } from "@/chainFactory";
 import { logInfo } from "@/logger";
 import { ChatManager } from "@/core/ChatManager";
@@ -65,8 +66,8 @@ export class ChatUIState {
     includeActiveWebTab: boolean = false,
     content?: any[],
     updateLoadingMessage?: (message: string) => void
-  ): Promise<string> {
-    const messageId = await this.chatManager.sendMessage(
+  ): Promise<{ messageId: string; displayMessagesSnapshot: ChatMessage[] }> {
+    const result = await this.chatManager.sendMessage(
       displayText,
       context,
       chainType,
@@ -76,7 +77,7 @@ export class ChatUIState {
       updateLoadingMessage
     );
     this.notifyListeners();
-    return messageId;
+    return result;
   }
 
   /**
@@ -249,8 +250,31 @@ export class ChatUIState {
   /**
    * Save current chat history
    */
-  async saveChat(modelKey: string): Promise<void> {
-    await this.chatManager.saveChat(modelKey);
+  async saveChat(
+    modelKey: string,
+    options?: {
+      silent?: boolean;
+      skipTopicGeneration?: boolean;
+      conversationId?: string;
+      messages?: ChatMessage[];
+      projectForFrontmatter?: ProjectConfig | null;
+    }
+  ): Promise<void> {
+    await this.chatManager.saveChat(modelKey, options);
+  }
+
+  /**
+   * Reset active conversation binding without clearing repository data.
+   */
+  resetCurrentConversationBinding(): void {
+    this.chatManager.resetCurrentConversationBinding();
+  }
+
+  /**
+   * Return the currently bound conversationId for persistence lineage.
+   */
+  getCurrentConversationId(): string | null {
+    return this.chatManager.getCurrentConversationId();
   }
 
   /**

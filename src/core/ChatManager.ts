@@ -5,7 +5,7 @@ import {
   getSystemPromptWithMemory,
 } from "@/system-prompts/systemPromptBuilder";
 import { ChainType } from "@/chainFactory";
-import { getChainType, getCurrentProject } from "@/aiParams";
+import { getChainType, getCurrentProject, type ProjectConfig } from "@/aiParams";
 import { logInfo, logWarn } from "@/logger";
 import { ChatMessage, MessageContext, WebTabContext } from "@/types/message";
 import { processPrompt, type ProcessedPromptResult } from "@/commands/customCommandUtils";
@@ -418,7 +418,7 @@ export class ChatManager {
     includeActiveWebTab: boolean = false,
     content?: any[],
     updateLoadingMessage?: (message: string) => void
-  ): Promise<string> {
+  ): Promise<{ messageId: string; displayMessagesSnapshot: ChatMessage[] }> {
     try {
       logInfo(`[ChatManager] Sending message: "${displayText}"`);
 
@@ -488,8 +488,13 @@ export class ChatManager {
       // Update the processed content
       currentRepo.updateProcessedText(messageId, processedContent, contextEnvelope);
 
+      const rawDisplay = currentRepo.getDisplayMessages();
+      const displayMessagesSnapshot = Array.isArray(rawDisplay)
+        ? rawDisplay.map((m) => ({ ...m }))
+        : [];
+
       logInfo(`[ChatManager] Successfully sent message ${messageId}`);
-      return messageId;
+      return { messageId, displayMessagesSnapshot };
     } catch (error) {
       logInfo(`[ChatManager] Error sending message:`, error);
       throw error;
@@ -687,6 +692,7 @@ export class ChatManager {
   clearMessages(): void {
     const currentRepo = this.getCurrentMessageRepo();
     currentRepo.clear();
+    this.persistenceManager.resetCurrentConversation();
     // Clear chain memory directly
     this.chainManager.memoryManager.clearChatMemory();
     logInfo(`[ChatManager] Cleared all messages`);
@@ -770,8 +776,31 @@ export class ChatManager {
   /**
    * Save current chat history
    */
-  async saveChat(modelKey: string): Promise<void> {
-    await this.persistenceManager.saveChat(modelKey);
+  async saveChat(
+    modelKey: string,
+    options?: {
+      silent?: boolean;
+      skipTopicGeneration?: boolean;
+      conversationId?: string;
+      messages?: ChatMessage[];
+      projectForFrontmatter?: ProjectConfig | null;
+    }
+  ): Promise<void> {
+    await this.persistenceManager.saveChat(modelKey, options);
+  }
+
+  /**
+   * Reset active conversation binding so next save starts a new conversation file.
+   */
+  resetCurrentConversationBinding(): void {
+    this.persistenceManager.resetCurrentConversation();
+  }
+
+  /**
+   * Return the currently bound conversationId for persistence lineage.
+   */
+  getCurrentConversationId(): string | null {
+    return this.persistenceManager.getCurrentConversationId();
   }
 
   /**

@@ -254,16 +254,16 @@ export function SettingItem(props: SettingItemProps) {
   return (
     <div
       className={cn(
-        "tw-flex tw-flex-col tw-items-start tw-justify-between tw-gap-4 tw-py-4 sm:tw-flex-row sm:tw-items-center",
+        "tw-flex tw-flex-col tw-items-start tw-justify-between tw-gap-3 tw-px-4 tw-py-3 sm:tw-flex-row sm:tw-items-center",
         "tw-w-full",
         className
       )}
     >
-      <div className="tw-w-full tw-space-y-1.5 sm:tw-w-[300px]">
-        <div className="tw-text-sm tw-font-medium tw-leading-none">{title}</div>
+      <div className="tw-flex-1 tw-space-y-1">
+        <div className="tw-text-sm">{title}</div>
         {description && <div className="tw-text-xs tw-text-muted">{description}</div>}
       </div>
-      <div className="tw-w-full tw-flex-1 sm:tw-flex sm:tw-justify-end">{renderControl()}</div>
+      <div className="tw-flex tw-shrink-0 tw-items-center">{renderControl()}</div>
     </div>
   );
 }

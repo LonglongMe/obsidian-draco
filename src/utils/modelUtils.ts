@@ -52,7 +52,7 @@ export function getApiKeyForProvider(provider: SettingKeyProviders, model?: Cust
 function getRequiredModels(): ReadonlyArray<{ name: string; provider: string }> {
   return [
     { name: ChatModels.COPILOT_PLUS_FLASH, provider: ChatModelProviders.COPILOT_PLUS },
-    { name: ChatModels.OPENROUTER_GEMINI_2_5_FLASH, provider: ChatModelProviders.OPENROUTERAI },
+    { name: ChatModels.OPENROUTER_GLM_5_1, provider: ChatModelProviders.OPENROUTERAI },
   ];
 }
 

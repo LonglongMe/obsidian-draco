@@ -36,11 +36,6 @@ export class CopilotSettingTab extends PluginSettingTab {
         }
       }
 
-      // Autosave the current chat before reloading
-      if (chatView && getSettings().autosaveChat) {
-        await this.plugin.autosaveCurrentChat();
-      }
-
       // Reload the plugin
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const app = this.plugin.app as any;

@@ -17,7 +17,7 @@ import { CustomCommandRegister } from "@/commands/customCommandRegister";
 import { migrateCommands, suggestDefaultCommands } from "@/commands/migrator";
 import { migrateSystemPromptsFromSettings } from "@/system-prompts/migration";
 import { SystemPromptRegister } from "@/system-prompts/systemPromptRegister";
-import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/constants";
+import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_CHAT_HISTORY_FOLDER, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/constants";
 import { ChatManager } from "@/core/ChatManager";
 import { MessageRepository } from "@/core/MessageRepository";
 import { encryptAllKeys } from "@/encryptionService";
@@ -25,7 +25,6 @@ import { logInfo, logWarn } from "@/logger";
 import { logFileManager } from "@/logFileManager";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
 import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
-import { checkIsPlusUser, refreshSelfHostModeValidation } from "@/plusUtils";
 import {
   getWebViewerService,
   startActiveWebTabTracking,
@@ -62,12 +61,22 @@ import {
 } from "obsidian";
 import { ChatHistoryItem } from "@/components/chat-components/ChatHistoryPopover";
 import {
+  extractChatConversationId,
   extractChatDate,
   extractChatLastAccessedAtMs,
+  extractChatPinned,
+  extractChatProjectId,
+  extractChatProjectName,
   extractChatTitle,
+  formatChatUiTitleFromBodyWithoutFrontmatter,
 } from "@/utils/chatHistoryUtils";
 import { RecentUsageManager } from "@/utils/recentUsageManager";
-import { listMarkdownFiles, patchFrontmatter, resolveFileByPath } from "@/utils/vaultAdapterUtils";
+import {
+  listMarkdownFiles,
+  patchFrontmatter,
+  readFrontmatterViaAdapter,
+  resolveFileByPath,
+} from "@/utils/vaultAdapterUtils";
 import { v4 as uuidv4 } from "uuid";
 
 // Removed unused FileTrackingState interface
@@ -112,8 +121,6 @@ export default class CopilotPlugin extends Plugin {
     // Initialize BrevilabsClient
     this.brevilabsClient = BrevilabsClient.getInstance();
     this.brevilabsClient.setPluginVersion(this.manifest.version);
-    checkIsPlusUser();
-    refreshSelfHostModeValidation();
 
     // Initialize ProjectManager
     this.projectManager = ProjectManager.getInstance(this.app, this);
@@ -170,7 +177,7 @@ export default class CopilotPlugin extends Plugin {
 
     registerCommands(this, undefined, getSettings());
 
-    // Tool initialization is now handled automatically in CopilotPlusChainRunner and AutonomousAgentChainRunner
+    // Tool initialization for agent modes removed in DIY fork
 
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu: Menu) => {
@@ -282,15 +289,6 @@ export default class CopilotPlugin extends Plugin {
 
   updateUserMessageHistory(newMessage: string) {
     this.userMessageHistory = [...this.userMessageHistory, newMessage];
-  }
-
-  async autosaveCurrentChat() {
-    if (getSettings().autosaveChat) {
-      const chatView = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE)[0]?.view as CopilotView;
-      if (chatView) {
-        await chatView.saveChat();
-      }
-    }
   }
 
   async processText(
@@ -633,7 +631,7 @@ export default class CopilotPlugin extends Plugin {
   }
 
   async getChatHistoryFiles(): Promise<TFile[]> {
-    const folderFiles = await listMarkdownFiles(this.app, getSettings().defaultSaveFolder);
+    const folderFiles = await listMarkdownFiles(this.app, DEFAULT_CHAT_HISTORY_FOLDER);
     if (folderFiles.length === 0) return [];
 
     // Get current project ID if in a project
@@ -641,24 +639,40 @@ export default class CopilotPlugin extends Plugin {
     const currentProjectId = currentProject?.id;
 
     if (currentProjectId) {
-      // In project mode: return only files with this project's ID prefix
-      const projectPrefix = `${currentProjectId}__`;
-      return folderFiles.filter((file) => file.basename.startsWith(projectPrefix));
+      // In project mode: return only files with matching frontmatter projectId
+      return folderFiles.filter((file) => extractChatProjectId(file) === currentProjectId);
     } else {
-      // In non-project mode: return only files without any project ID prefix
-      // This assumes project IDs always use the format projectId__ as prefix
-      return folderFiles.filter((file) => {
-        // Check if the filename has any projectId__ prefix pattern
-        return !file.basename.match(/^[a-zA-Z0-9-]+__/);
-      });
+      // In non-project mode: return chats without frontmatter projectId
+      return folderFiles.filter((file) => extractChatProjectId(file) == null);
     }
+  }
+
+  /**
+   * Resolve projectId from metadata cache or disk (cache can lag right after save; hidden paths may miss cache).
+   */
+  private async resolveChatProjectId(file: TFile): Promise<string | null> {
+    const cached = extractChatProjectId(file);
+    if (cached) return cached;
+    try {
+      const fm = await readFrontmatterViaAdapter(this.app, file.path);
+      const raw = fm?.projectId;
+      if (typeof raw === "string" && raw.trim()) {
+        return raw.trim();
+      }
+    } catch {
+      // Ignore — treat as non-project chat
+    }
+    return null;
   }
 
   async getChatHistoryItems(): Promise<ChatHistoryItem[]> {
     const files = await this.getChatHistoryFiles();
-    return files.map((file) => {
+    const projectNameById = new Map((getSettings().projectList || []).map((project) => [project.id, project.name]));
+    return Promise.all(files.map(async (file) => {
       const createdAt = extractChatDate(file);
       const persistedLastAccessedAtMs = extractChatLastAccessedAtMs(file);
+      const projectId = await this.resolveChatProjectId(file);
+      const conversationId = extractChatConversationId(file);
 
       // Use effective last used time (prefers in-memory value for immediate UI updates)
       const effectiveLastAccessedAtMs =
@@ -668,13 +682,91 @@ export default class CopilotPlugin extends Plugin {
         );
       const lastAccessedAt = new Date(effectiveLastAccessedAtMs);
 
+      const { preview, uiTitle } = await this.readChatNotePresentation(file);
       return {
         id: file.path,
-        title: extractChatTitle(file),
+        conversationId: conversationId || undefined,
+        title: uiTitle,
+        preview,
         createdAt,
+        updatedAt: new Date(file.stat.mtime),
         lastAccessedAt,
+        isPinned: extractChatPinned(file),
+        projectId: projectId || undefined,
+        projectName: extractChatProjectName(file) || (projectId ? projectNameById.get(projectId) : undefined),
       };
-    });
+    }));
+  }
+
+  /**
+   * Return all chat history items across all projects for sidebar navigation.
+   */
+  async getAllChatHistoryItems(): Promise<ChatHistoryItem[]> {
+    const files = await listMarkdownFiles(this.app, DEFAULT_CHAT_HISTORY_FOLDER);
+    const projectNameById = new Map((getSettings().projectList || []).map((project) => [project.id, project.name]));
+
+    return Promise.all(files.map(async (file) => {
+      const createdAt = extractChatDate(file);
+      const persistedLastAccessedAtMs = extractChatLastAccessedAtMs(file);
+      const projectId = await this.resolveChatProjectId(file);
+      const conversationId = extractChatConversationId(file);
+      const effectiveLastAccessedAtMs =
+        this.chatHistoryLastAccessedAtManager.getEffectiveLastUsedAt(
+          file.path,
+          persistedLastAccessedAtMs ?? createdAt.getTime()
+        );
+
+      const { preview, uiTitle } = await this.readChatNotePresentation(file);
+      return {
+        id: file.path,
+        conversationId: conversationId || undefined,
+        title: uiTitle,
+        preview,
+        createdAt,
+        updatedAt: new Date(file.stat.mtime),
+        lastAccessedAt: new Date(effectiveLastAccessedAtMs),
+        isPinned: extractChatPinned(file),
+        projectId: projectId || undefined,
+        projectName: extractChatProjectName(file) || (projectId ? projectNameById.get(projectId) : undefined),
+      };
+    }));
+  }
+
+  /**
+   * Normalize preview text for compact list rendering.
+   */
+  private formatChatPreview(raw: string): string {
+    const withoutThinkBlocks = raw
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
+    const cleanedRaw = withoutThinkBlocks.trim() || raw.replace(/<\/?think>/gi, "");
+    const oneLine = cleanedRaw
+      .replace(/\[Timestamp:[^\]]*\]/gi, "")
+      .replace(/\!\[[^\]]*\]\([^)]+\)/g, "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/<[^>]+>/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return oneLine.length > 140 ? `${oneLine.slice(0, 140)}...` : oneLine;
+  }
+
+  /**
+   * Single read of a chat note: list title (first 10 chars of first user turn) + preview snippet.
+   */
+  private async readChatNotePresentation(file: TFile): Promise<{ preview: string; uiTitle: string }> {
+    try {
+      const content = await this.app.vault.read(file);
+      const withoutFrontmatter = content.replace(/^---[\s\S]*?---\n?/, "");
+      const fromConversation = formatChatUiTitleFromBodyWithoutFrontmatter(withoutFrontmatter);
+      const uiTitle = fromConversation ?? extractChatTitle(file);
+      const firstAiMatch = withoutFrontmatter.match(/\*\*ai\*\*:\s*([\s\S]*?)(?=\n\*\*(?:user|ai)\*\*:|$)/i);
+      const firstUserMatch = withoutFrontmatter.match(/\*\*user\*\*:\s*([\s\S]*?)(?=\n\*\*(?:user|ai)\*\*:|$)/i);
+      const source = firstAiMatch?.[1] || firstUserMatch?.[1] || "";
+      const preview = this.formatChatPreview(source);
+      return { preview, uiTitle };
+    } catch {
+      return { preview: "", uiTitle: extractChatTitle(file) };
+    }
   }
 
   /**
@@ -739,9 +831,6 @@ export default class CopilotPlugin extends Plugin {
   }
 
   async loadChatHistory(file: TFile) {
-    // First autosave the current chat if the setting is enabled
-    await this.autosaveCurrentChat();
-
     // Check if the Copilot view is already active
     const existingView = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE)[0];
     if (!existingView) {
@@ -769,6 +858,16 @@ export default class CopilotPlugin extends Plugin {
       await this.loadChatHistory(file);
     } else {
       throw new Error("Chat file not found.");
+    }
+  }
+
+  /**
+   * Mark a saved chat as read for sidebar indicators (updates lastAccessedAt / in-memory touch).
+   */
+  async touchChatHistoryByPathIfExists(filePath: string): Promise<void> {
+    const file = await resolveFileByPath(this.app, filePath);
+    if (file) {
+      await this.touchChatHistoryLastAccessedAt(file);
     }
   }
 
@@ -836,12 +935,63 @@ export default class CopilotPlugin extends Plugin {
     }
   }
 
+  /**
+   * Update pinned status for a chat by writing frontmatter `pinned`.
+   */
+  async setChatPinned(fileId: string, pinned: boolean): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(fileId);
+    if (file instanceof TFile) {
+      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        frontmatter.pinned = pinned;
+      });
+      return;
+    }
+
+    if (await resolveFileByPath(this.app, fileId)) {
+      await patchFrontmatter(this.app, fileId, { pinned: pinned ? "true" : "false" });
+      return;
+    }
+
+    throw new Error("Chat file not found.");
+  }
+
+  /**
+   * Assign or remove project association for a chat note.
+   */
+  async setChatProject(fileId: string, projectId: string | null): Promise<void> {
+    const project =
+      projectId == null ? null : (getSettings().projectList || []).find((item) => item.id === projectId) || null;
+    const file = this.app.vault.getAbstractFileByPath(fileId);
+    if (file instanceof TFile) {
+      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        if (project) {
+          frontmatter.projectId = project.id;
+          frontmatter.projectName = project.name;
+        } else {
+          delete frontmatter.projectId;
+          delete frontmatter.projectName;
+        }
+      });
+      return;
+    }
+
+    if (await resolveFileByPath(this.app, fileId)) {
+      await patchFrontmatter(this.app, fileId, {
+        projectId: project?.id || "",
+        projectName: project?.name || "",
+      });
+      return;
+    }
+
+    throw new Error("Chat file not found.");
+  }
+
   async handleNewChat() {
     clearRecordedPromptPayload();
     await logFileManager.clear();
 
     // Analyze chat messages for memory if enabled
-    if (getSettings().enableRecentConversations) {
+    if (getSettings().enableRecentConversations && getCurrentProject()) {
       try {
         // Get the current chat model from the chain manager
         const chainManager = this.projectManager.getCurrentChainManager();
@@ -851,9 +1001,6 @@ export default class CopilotPlugin extends Plugin {
         logInfo("Failed to analyze chat messages for memory:", error);
       }
     }
-
-    // First autosave the current chat if the setting is enabled
-    await this.autosaveCurrentChat();
 
     // Abort any ongoing streams before clearing chat
     const existingView = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE)[0];

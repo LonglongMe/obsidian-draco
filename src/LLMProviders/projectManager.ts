@@ -66,7 +66,7 @@ export default class ProjectManager {
         settings.enableSemanticSearchV3 &&
         settings.indexVaultToVectorStore === VAULT_VECTOR_STORE_STRATEGY.ON_MODE_SWITCH &&
         (getChainType() === ChainType.VAULT_QA_CHAIN ||
-          getChainType() === ChainType.COPILOT_PLUS_CHAIN);
+          getChainType() === ChainType.LLM_CHAIN);
       await this.getCurrentChainManager().createChainWithNewModel({
         refreshIndex: shouldAutoIndex,
       });
@@ -189,11 +189,8 @@ export default class ProjectManager {
       setProjectLoading(true);
       logInfo("Project loading started...");
 
-      // 1. save current project message. 2. load next project message
-
       // switch default project
       if (!project) {
-        await this.saveCurrentProjectMessage();
         this.currentProjectId = null; // ensure set currentProjectId
 
         await this.loadNextProjectMessage();
@@ -207,7 +204,6 @@ export default class ProjectManager {
         return;
       }
 
-      await this.saveCurrentProjectMessage();
       this.currentProjectId = projectId; // ensure set currentProjectId
 
       // Use sequential operations to ensure loading state is maintained
@@ -236,12 +232,6 @@ export default class ProjectManager {
     } finally {
       setProjectLoading(false);
     }
-  }
-
-  private async saveCurrentProjectMessage() {
-    // The new ChatManager handles message persistence internally
-    // during project switches, so we just need to trigger autosave
-    await this.plugin.autosaveCurrentChat();
   }
 
   private async loadNextProjectMessage() {

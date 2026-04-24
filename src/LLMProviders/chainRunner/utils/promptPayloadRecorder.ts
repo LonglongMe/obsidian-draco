@@ -1,6 +1,7 @@
 import { PromptContextEnvelope } from "@/context/PromptContextTypes";
 import { logMarkdownBlock } from "@/logger";
 import { ToolRegistry } from "@/tools/ToolRegistry";
+import { formatDateTime } from "@/utils";
 
 interface PromptPayloadSnapshot {
   timestamp: string;
@@ -8,9 +9,134 @@ interface PromptPayloadSnapshot {
   serializedMessages: string;
   messagesArray: unknown[]; // Store for intelligent analysis
   contextEnvelope?: PromptContextEnvelope;
+  assistantResponse?: string;
 }
 
 let latestSnapshot: PromptPayloadSnapshot | null = null;
+const COPILOT_DEBUG_FOLDER = "copilot-debug";
+const conversationDebugPathById = new Map<string, string>();
+
+/**
+ * Sanitize a string for safe vault file names.
+ */
+function toSafeFileName(value: string): string {
+  return value.replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, "-").slice(0, 120);
+}
+
+/**
+ * Ensure a folder exists by creating each path segment as needed.
+ */
+async function ensureFolderPathExists(path: string): Promise<void> {
+  if (typeof app === "undefined" || !app.vault?.adapter || !path) {
+    return;
+  }
+
+  const parts = path.split("/").filter(Boolean);
+  let current = "";
+  for (const part of parts) {
+    current = current ? `${current}/${part}` : part;
+    const exists = await app.vault.adapter.exists(current);
+    if (!exists) {
+      await app.vault.createFolder(current);
+    }
+  }
+}
+
+/**
+ * Persist a debug snapshot for each conversation to copilot-debug/<conversationId>.md.
+ */
+async function persistSnapshotToDebugFolder(snapshot: PromptPayloadSnapshot): Promise<void> {
+  if (typeof app === "undefined" || !app.vault?.adapter) {
+    return;
+  }
+
+  const conversationId = snapshot.contextEnvelope?.conversationId || "unknown-conversation";
+  const existingPath = conversationDebugPathById.get(conversationId);
+  const timestampFileName = formatDateTime(new Date(snapshot.timestamp)).fileName;
+
+  const extractLastUserTopic = (): string => {
+    const messages = Array.isArray(snapshot.messagesArray) ? snapshot.messagesArray : [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i] as { role?: string; content?: unknown };
+      if (msg?.role !== "user") continue;
+      const content = msg.content;
+      const text =
+        typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? content
+                .map((item) =>
+                  typeof item === "object" &&
+                  item !== null &&
+                  "text" in (item as Record<string, unknown>)
+                    ? String((item as Record<string, unknown>).text || "")
+                    : ""
+                )
+                .join(" ")
+            : "";
+      const topic = text
+        .replace(/\[\[([^\]]+)\]\]/g, "$1")
+        .replace(/[{}[\]]/g, "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 10)
+        .join(" ")
+        .trim();
+      if (topic) return topic;
+    }
+    return "Untitled Chat";
+  };
+
+  const resolveDebugPath = (): string => {
+    if (existingPath) return existingPath;
+    const topic = toSafeFileName(extractLastUserTopic().replace(/\s+/g, "_"));
+    // Use fixed template
+    const template = "{$topic}@{$date}_{$time}";
+    const fileName = `${toSafeFileName(template)}.md`
+      .replace("{$topic}", topic)
+      .replace("{$date}", timestampFileName.split("_")[0])
+      .replace("{$time}", timestampFileName.split("_")[1]);
+    return `${COPILOT_DEBUG_FOLDER}/${fileName}`;
+  };
+
+  const filePath = resolveDebugPath();
+  conversationDebugPathById.set(conversationId, filePath);
+  const messageId = snapshot.contextEnvelope?.messageId || "N/A";
+  const envelopeJson = JSON.stringify(snapshot.contextEnvelope ?? null, null, 2);
+
+  const blockLines = [
+    `## ${snapshot.timestamp}${snapshot.modelName ? ` — ${snapshot.modelName}` : ""}`,
+    "",
+    `- conversationId: ${conversationId}`,
+    `- messageId: ${messageId}`,
+    "",
+    "### Envelope",
+    "```json",
+    envelopeJson,
+    "```",
+    "",
+    "### Messages",
+    "```json",
+    snapshot.serializedMessages,
+    "```",
+    "",
+    "### Assistant Response (Raw)",
+    "<!-- ASSISTANT_RESPONSE_BEGIN -->",
+    snapshot.assistantResponse ?? "",
+    "<!-- ASSISTANT_RESPONSE_END -->",
+    "",
+  ];
+  const block = blockLines.join("\n");
+
+  await ensureFolderPathExists(COPILOT_DEBUG_FOLDER);
+  const exists = await app.vault.adapter.exists(filePath);
+  if (exists) {
+    // Keep one debug file per conversation and overwrite each turn.
+    await app.vault.adapter.write(filePath, block);
+    return;
+  }
+  await app.vault.create(filePath, block);
+}
 
 /**
  * Safely serialize the model conversation payload for logging while preserving readability.
@@ -255,6 +381,7 @@ export function recordPromptPayload(params: {
       serializedMessages: safeSerialize(messages),
       messagesArray: messages, // Store for analysis
       contextEnvelope,
+      assistantResponse: undefined,
     };
   } catch {
     // Fall back to best-effort stringification to avoid blocking logging entirely.
@@ -264,8 +391,10 @@ export function recordPromptPayload(params: {
       serializedMessages: String(messages),
       messagesArray: messages,
       contextEnvelope,
+      assistantResponse: undefined,
     };
   }
+
 }
 
 /**
@@ -311,6 +440,21 @@ export async function flushRecordedPromptPayloadToLog(): Promise<void> {
 
   logMarkdownBlock(lines);
   latestSnapshot = null;
+}
+
+/**
+ * Persist the latest payload snapshot into copilot-debug after the AI response completes.
+ */
+export async function flushRecordedPromptPayloadToDebugFile(
+  assistantResponse?: string
+): Promise<void> {
+  if (!latestSnapshot) {
+    return;
+  }
+  if (assistantResponse !== undefined) {
+    latestSnapshot.assistantResponse = assistantResponse;
+  }
+  await persistSnapshotToDebugFolder(latestSnapshot);
 }
 
 /**

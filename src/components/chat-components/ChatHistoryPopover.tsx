@@ -7,7 +7,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { logError } from "@/logger";
-import { useSettingsValue } from "@/settings/model";
 import { sortByStrategy } from "@/utils/recentUsageManager";
 import { Platform } from "obsidian";
 
@@ -16,9 +15,16 @@ const PAGE_SIZE = 50;
 
 export interface ChatHistoryItem {
   id: string;
+  conversationId?: string;
   title: string;
+  preview?: string;
   createdAt: Date;
+  /** Note file modification time (new replies bump this). */
+  updatedAt: Date;
   lastAccessedAt: Date;
+  isPinned?: boolean;
+  projectId?: string;
+  projectName?: string;
 }
 
 interface ChatHistoryPopoverProps {
@@ -47,7 +53,6 @@ export function ChatHistoryPopover({
   const observerRef = useRef<IntersectionObserver | null>(null);
   const deleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMobile = Platform.isMobile;
-  const settings = useSettingsValue();
 
   const filteredHistory = useMemo(() => {
     if (!searchQuery.trim()) return chatHistory;
@@ -57,12 +62,12 @@ export function ChatHistoryPopover({
   }, [chatHistory, searchQuery]);
 
   const sortedHistory = useMemo(() => {
-    return sortByStrategy(filteredHistory, settings.chatHistorySortStrategy, {
+    return sortByStrategy(filteredHistory, "recent", {
       getName: (chat) => chat.title,
       getCreatedAtMs: (chat) => chat.createdAt.getTime(),
       getLastUsedAtMs: (chat) => chat.lastAccessedAt.getTime(),
     });
-  }, [filteredHistory, settings.chatHistorySortStrategy]);
+  }, [filteredHistory]);
 
   /**
    * Reset display count only when the popover opens or when the search query changes.
@@ -123,20 +128,7 @@ export function ChatHistoryPopover({
   }, []);
 
   const groupedHistory = useMemo(() => {
-    const sortStrategy = settings.chatHistorySortStrategy;
-
-    // For name sorting, show a flat list without time-based grouping
-    if (sortStrategy === "name") {
-      return [
-        {
-          key: "All",
-          label: "All",
-          chats: paginatedHistory,
-          priority: 0,
-        },
-      ];
-    }
-
+    // Fixed to "recent" sorting strategy
     const groups: Array<{
       key: string;
       label: string;
@@ -147,8 +139,8 @@ export function ChatHistoryPopover({
     const now = new Date();
 
     paginatedHistory.forEach((chat) => {
-      // Use lastAccessedAt for "recent" strategy, createdAt for "created" strategy
-      const referenceDate = sortStrategy === "recent" ? chat.lastAccessedAt : chat.createdAt;
+      // Use lastAccessedAt for "recent" strategy
+      const referenceDate = chat.lastAccessedAt;
       const diffTime = now.getTime() - referenceDate.getTime();
       const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
 
@@ -187,7 +179,7 @@ export function ChatHistoryPopover({
 
     // Sort by priority, ensuring Today is at the top.
     return groups.sort((a, b) => a.priority - b.priority);
-  }, [settings.chatHistorySortStrategy, paginatedHistory]);
+  }, [paginatedHistory]);
 
   const handleStartEdit = (id: string, currentTitle: string) => {
     setEditingId(id);

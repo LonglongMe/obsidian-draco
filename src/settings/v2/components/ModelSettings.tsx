@@ -1,5 +1,6 @@
 import { CustomModel } from "@/aiParams";
 import { SettingItem } from "@/components/ui/setting-item";
+import { SettingsGroup } from "@/components/ui/settings-group";
 import { BUILTIN_CHAT_MODELS, BUILTIN_EMBEDDING_MODELS } from "@/constants";
 import EmbeddingManager from "@/LLMProviders/embeddingManager";
 import ProjectManager from "@/LLMProviders/projectManager";
@@ -141,19 +142,22 @@ export const ModelSettings: React.FC = () => {
   };
 
   return (
-    <div className="tw-space-y-4">
-      <section>
-        <ModelTable
-          models={settings.activeModels}
-          onEdit={(model) => handleEditModel(model)}
-          onCopy={(model) => onCopyModel(model)}
-          onDelete={onDeleteModel}
-          onAdd={() => setShowAddDialog(true)}
-          onUpdateModel={handleTableUpdate}
-          onReorderModels={(newModels) => handleModelReorder(newModels)}
-          onRefresh={handleRefreshChatModels}
-          title="Chat Models"
-        />
+    <div className="tw-py-2">
+      {/* Chat Models Group */}
+      <SettingsGroup title="Chat Models">
+        <div className="tw-p-4">
+          <ModelTable
+            models={settings.activeModels}
+            onEdit={(model) => handleEditModel(model)}
+            onCopy={(model) => onCopyModel(model)}
+            onDelete={onDeleteModel}
+            onAdd={() => setShowAddDialog(true)}
+            onUpdateModel={handleTableUpdate}
+            onReorderModels={(newModels) => handleModelReorder(newModels)}
+            onRefresh={handleRefreshChatModels}
+            title="Chat Models"
+          />
+        </div>
 
         {/* model add dialog */}
         <ModelAddDialog
@@ -168,42 +172,43 @@ export const ModelSettings: React.FC = () => {
           }
         />
 
-        <div className="tw-space-y-4">
-          <SettingItem
-            type="slider"
-            title="Conversation turns in context"
-            description="The number of previous conversation turns to include in the context. Default is 15 turns, i.e. 30 messages."
-            value={settings.contextTurns}
-            onChange={(value) => updateSetting("contextTurns", value)}
-            min={1}
-            max={50}
-            step={1}
-          />
-          <SettingItem
-            type="slider"
-            title="Auto-compact threshold"
-            description="Automatically summarize context when it exceeds this token count. Set to maximum to make it less aggressive."
-            min={64000}
-            max={1000000}
-            step={64000}
-            value={settings.autoCompactThreshold}
-            onChange={(value) => updateSetting("autoCompactThreshold", value)}
+        <SettingItem
+          type="slider"
+          title="Conversation turns in context"
+          description="The number of previous conversation turns to include in the context"
+          value={settings.contextTurns}
+          onChange={(value) => updateSetting("contextTurns", value)}
+          min={1}
+          max={50}
+          step={1}
+        />
+        <SettingItem
+          type="slider"
+          title="Auto-compact threshold"
+          description="Automatically summarize context when it exceeds this token count"
+          min={64000}
+          max={1000000}
+          step={64000}
+          value={settings.autoCompactThreshold}
+          onChange={(value) => updateSetting("autoCompactThreshold", value)}
+        />
+      </SettingsGroup>
+
+      {/* Embedding Models Group */}
+      <SettingsGroup title="Embedding Models">
+        <div className="tw-p-4">
+          <ModelTable
+            models={settings.activeEmbeddingModels}
+            onEdit={(model) => handleEditModel(model, true)}
+            onDelete={onDeleteEmbeddingModel}
+            onCopy={(model) => onCopyModel(model, true)}
+            onAdd={() => setShowAddEmbeddingDialog(true)}
+            onUpdateModel={handleEmbeddingModelUpdate}
+            onReorderModels={(newModels) => handleModelReorder(newModels, true)}
+            onRefresh={handleRefreshEmbeddingModels}
+            title="Embedding Models"
           />
         </div>
-      </section>
-
-      <section>
-        <ModelTable
-          models={settings.activeEmbeddingModels}
-          onEdit={(model) => handleEditModel(model, true)}
-          onDelete={onDeleteEmbeddingModel}
-          onCopy={(model) => onCopyModel(model, true)}
-          onAdd={() => setShowAddEmbeddingDialog(true)}
-          onUpdateModel={handleEmbeddingModelUpdate}
-          onReorderModels={(newModels) => handleModelReorder(newModels, true)}
-          onRefresh={handleRefreshEmbeddingModels}
-          title="Embedding Models"
-        />
 
         {/* Embedding model add dialog */}
         <ModelAddDialog
@@ -216,7 +221,7 @@ export const ModelSettings: React.FC = () => {
           isEmbeddingModel={true}
           ping={(model) => EmbeddingManager.getInstance().ping(model)}
         />
-      </section>
+      </SettingsGroup>
     </div>
   );
 };

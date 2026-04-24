@@ -4,7 +4,6 @@ import {
   extractChatTitle,
   getChatDisplayText,
 } from "@/utils/chatHistoryUtils";
-import { getSettings } from "@/settings/model";
 import { RecentUsageManager, sortByStrategy } from "@/utils/recentUsageManager";
 import { App, FuzzySuggestModal, TFile } from "obsidian";
 
@@ -25,12 +24,11 @@ export class LoadChatHistoryModal extends FuzzySuggestModal<TFile> {
   }
 
   /**
-   * Return chat history files sorted by the configured strategy.
+   * Return chat history files sorted by recency.
    * Uses in-memory recency data for immediate UI feedback when available.
    */
   getItems(): TFile[] {
-    const sortStrategy = getSettings().chatHistorySortStrategy;
-    return sortByStrategy(this.chatFiles, sortStrategy, {
+    return sortByStrategy(this.chatFiles, "recent", {
       getName: (file) => extractChatTitle(file),
       getCreatedAtMs: (file) => extractChatDate(file).getTime(),
       getLastUsedAtMs: (file) => {

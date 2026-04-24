@@ -47,6 +47,7 @@ import { generateDefaultCommands } from "@/commands/migrator";
 import { CustomCommand } from "@/commands/type";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { SettingItem } from "@/components/ui/setting-item";
+import { SettingsGroup } from "@/components/ui/settings-group";
 import { Notice } from "obsidian";
 
 const MobileCommandCard: React.FC<{
@@ -119,7 +120,7 @@ const MobileCommandCard: React.FC<{
           }}
         />
       </div>
-      <div className="tw-flex tw-items-center tw-justify-between  tw-gap-2">
+      <div className="tw-flex tw-items-center tw-justify-between tw-gap-2">
         <div className="tw-flex tw-items-center tw-gap-1">
           <span className="tw-text-sm tw-font-medium">In Slash</span>
           <HelpTooltip
@@ -314,7 +315,6 @@ export const CommandSettings: React.FC = () => {
   const handleRemove = async (command: CustomCommand) => {
     try {
       await CustomCommandManager.getInstance().deleteCommand(command);
-
       new Notice(`Command "${command.title}" deleted successfully!`);
     } catch (error) {
       logError("Failed to delete command:", error);
@@ -331,9 +331,6 @@ export const CommandSettings: React.FC = () => {
         title: copyName,
       };
       await CustomCommandManager.getInstance().createCommand(copiedCommand, {
-        // Explicitly make the new command the same order as the original command
-        // so it appears next to the original command in the menu. The extra
-        // suffix will ensure it is below the original command in the menu.
         autoOrder: false,
       });
     } catch (error) {
@@ -344,23 +341,15 @@ export const CommandSettings: React.FC = () => {
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-
-    if (!over || active.id === over.id) {
-      return;
-    }
+    if (!over || active.id === over.id) return;
 
     const activeIndex = commands.findIndex((command) => command.title === active.id);
     const overIndex = commands.findIndex((command) => command.title === over.id);
+    if (activeIndex === -1 || overIndex === -1) return;
 
-    if (activeIndex === -1 || overIndex === -1) {
-      return;
-    }
-
-    // Create new order
     const newCommands = [...commands];
     const [movedCommand] = newCommands.splice(activeIndex, 1);
     newCommands.splice(overIndex, 0, movedCommand);
-
     await CustomCommandManager.getInstance().reorderCommands(newCommands);
   };
 
@@ -397,17 +386,9 @@ export const CommandSettings: React.FC = () => {
   );
 
   return (
-    <div className="tw-space-y-4" ref={containerRef}>
-      <section>
-        <div className="tw-mb-4 tw-flex tw-flex-col tw-gap-2">
-          <div className="tw-text-xl tw-font-bold">Custom Commands</div>
-          <div className="tw-text-sm tw-text-muted">
-            Custom commands are preset prompts that you can trigger in the editor by right-clicking
-            and selecting them from the context menu or by using a <code>/</code> command in the
-            chat to load them into your chat input.
-          </div>
-        </div>
-
+    <div className="tw-py-2" ref={containerRef}>
+      {/* General Settings Group */}
+      <SettingsGroup title="General">
         <SettingItem
           type="text"
           title="Custom Prompts Folder Name"
@@ -422,7 +403,7 @@ export const CommandSettings: React.FC = () => {
         <SettingItem
           type="switch"
           title="Custom Prompt Templating"
-          description="Process variables like {activenote}, {foldername}, or {#tag} in prompts. Disable for raw prompts."
+          description="Process variables like {activenote} in prompts"
           checked={settings.enableCustomPromptTemplating}
           onCheckedChange={(checked) => {
             updateSetting("enableCustomPromptTemplating", checked);
@@ -430,7 +411,7 @@ export const CommandSettings: React.FC = () => {
         />
         <SettingItem
           type="select"
-          title="Custom Prompts Sort Strategy"
+          title="Sort Strategy"
           description="Sort order for slash command menu prompts"
           value={settings.promptSortStrategy}
           onChange={(value) => updateSetting("promptSortStrategy", value)}
@@ -440,35 +421,29 @@ export const CommandSettings: React.FC = () => {
             { label: "Manual", value: PromptSortStrategy.MANUAL },
           ]}
         />
+      </SettingsGroup>
 
-        <div className="tw-mb-4 tw-flex tw-items-start tw-gap-2 tw-rounded-md tw-border tw-border-solid tw-border-border tw-p-4 tw-text-muted">
-          <Lightbulb className="tw-size-5" />{" "}
-          <div>
-            Commands are automatically loaded from .md files in your custom prompts folder{" "}
-            <strong>{settings.customPromptsFolder}</strong>. Modifying the files will also update
-            the command settings.
-          </div>
-        </div>
-
-        <div className="tw-flex tw-flex-col tw-gap-4">
-          <div className="tw-flex tw-w-full tw-justify-between tw-gap-2 md:tw-justify-end">
-            <div>
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  new ConfirmModal(
-                    app,
-                    generateDefaultCommands,
-                    "This will add default commands to your custom prompts folder. Do you want to continue?",
-                    "Generate Default Commands"
-                  ).open()
-                }
-              >
-                Generate Default
-              </Button>
-            </div>
+      {/* Commands List Group */}
+      <SettingsGroup title="Commands">
+        <div className="tw-p-4">
+          <div className="tw-mb-4 tw-flex tw-w-full tw-justify-between tw-gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                new ConfirmModal(
+                  app,
+                  generateDefaultCommands,
+                  "This will add default commands to your custom prompts folder. Do you want to continue?",
+                  "Generate Default Commands"
+                ).open()
+              }
+            >
+              Generate Default
+            </Button>
             <Button
               variant="default"
+              size="sm"
               className="tw-gap-2"
               onClick={() => {
                 const newCommand: CustomCommand = {
@@ -485,9 +460,16 @@ export const CommandSettings: React.FC = () => {
                 modal.open();
               }}
             >
-              <Plus className="tw-size-2 md:tw-size-4" />
-              Add Cmd
+              <Plus className="tw-size-4" />
+              Add Command
             </Button>
+          </div>
+
+          <div className="tw-mb-4 tw-flex tw-items-start tw-gap-2 tw-rounded-md tw-border tw-border-solid tw-border-border tw-p-3 tw-text-xs tw-text-muted">
+            <Lightbulb className="tw-size-4 tw-shrink-0" />
+            <div>
+              Commands are loaded from .md files in <strong>{settings.customPromptsFolder}</strong>
+            </div>
           </div>
 
           {/* Desktop view */}
@@ -508,8 +490,7 @@ export const CommandSettings: React.FC = () => {
                         <HelpTooltip
                           content={
                             <div className="tw-max-w-xs tw-text-xs">
-                              If enabled, the command will be available in the context menu when you
-                              right-click in the editor.
+                              Available in the context menu when right-clicking in the editor.
                             </div>
                           }
                         />
@@ -521,8 +502,7 @@ export const CommandSettings: React.FC = () => {
                         <HelpTooltip
                           content={
                             <div className="tw-max-w-xs tw-text-xs">
-                              If enabled, the command will be available as a slash command in the
-                              chat.
+                              Available as a slash command in the chat.
                             </div>
                           }
                         />
@@ -563,7 +543,7 @@ export const CommandSettings: React.FC = () => {
           {/* Mobile view */}
           {renderMobileView()}
         </div>
-      </section>
+      </SettingsGroup>
     </div>
   );
 };

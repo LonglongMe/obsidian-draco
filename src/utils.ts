@@ -259,8 +259,10 @@ export const stringToChainType = (chain: string): ChainType => {
       return ChainType.LLM_CHAIN;
     case "vault_qa":
       return ChainType.VAULT_QA_CHAIN;
+    case "project":
+      return ChainType.PROJECT_CHAIN;
     case "copilot_plus":
-      return ChainType.COPILOT_PLUS_CHAIN;
+      return ChainType.LLM_CHAIN;
     default:
       throw new Error(`Unknown chain type: ${chain}`);
   }
@@ -404,13 +406,17 @@ export function isAllowedFileForNoteContext(file: TFile | null): boolean {
 }
 
 /**
- * Checks if a chain type is a Plus mode chain (Copilot Plus or Project Chain).
- * Plus mode chains have access to premium features like PDF processing and URL processing.
+ * Returns true for modes that support extended file / URL context (previously "Plus" modes).
+ * DIY fork: Chat and Vault QA get the same affordances as Projects for attachment types.
  * @param chainType The chain type to check
- * @returns true if this is a Plus mode chain, false otherwise
+ * @returns true if extended note/binary context is allowed for this mode
  */
 export function isPlusChain(chainType: ChainType): boolean {
-  return chainType === ChainType.COPILOT_PLUS_CHAIN || chainType === ChainType.PROJECT_CHAIN;
+  return (
+    chainType === ChainType.LLM_CHAIN ||
+    chainType === ChainType.VAULT_QA_CHAIN ||
+    chainType === ChainType.PROJECT_CHAIN
+  );
 }
 
 /**

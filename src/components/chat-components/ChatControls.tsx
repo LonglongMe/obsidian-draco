@@ -6,10 +6,8 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { SettingSwitch } from "@/components/ui/setting-switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PLUS_UTM_MEDIUMS } from "@/constants";
 import { logError } from "@/logger";
 import { shouldUseMiyo } from "@/miyo/miyoUtils";
-import { navigateToPlusPage, useIsPlusUser } from "@/plusUtils";
 import { updateSetting, useSettingsValue } from "@/settings/model";
 import { Docs4LLMParser } from "@/tools/FileParserManager";
 import { isRateLimitError } from "@/utils/rateLimitUtils";
@@ -17,25 +15,18 @@ import { DropdownMenu, DropdownMenuTrigger } from "@radix-ui/react-dropdown-menu
 import {
   AlertTriangle,
   CheckCircle,
-  ChevronDown,
   Download,
   FileText,
   History,
-  LibraryBig,
-  MessageCirclePlus,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Sparkles,
-  SquareArrowOutUpRight,
 } from "lucide-react";
 import { Notice } from "obsidian";
 import React from "react";
-import {
-  ChatHistoryItem,
-  ChatHistoryPopover,
-} from "@/components/chat-components/ChatHistoryPopover";
 import { TokenCounter } from "./TokenCounter";
-import { ChatSettingsPopover } from "@/components/chat-components/ChatSettingsPopover";
 
 export async function refreshVaultIndex() {
   try {
@@ -184,45 +175,26 @@ export async function forceRebuildCurrentProjectContext() {
 }
 
 interface ChatControlsProps {
-  onNewChat: () => void;
   onSaveAsNote: () => Promise<void>;
-  onLoadHistory: () => void;
   onModeChange: (mode: ChainType) => void;
   onCloseProject?: () => void;
-  chatHistory: ChatHistoryItem[];
-  onUpdateChatTitle: (id: string, newTitle: string) => Promise<void>;
-  onDeleteChat: (id: string) => Promise<void>;
-  onLoadChat: (id: string) => Promise<void>;
-  onOpenSourceFile?: (id: string) => Promise<void>;
   latestTokenCount?: number | null;
+  showConversationSidebar?: boolean;
+  onToggleConversationSidebar?: () => void;
 }
 
 export function ChatControls({
-  onNewChat,
   onSaveAsNote,
-  onLoadHistory,
   onModeChange,
   onCloseProject,
-  chatHistory,
-  onUpdateChatTitle,
-  onDeleteChat,
-  onLoadChat,
-  onOpenSourceFile,
   latestTokenCount,
+  showConversationSidebar,
+  onToggleConversationSidebar,
 }: ChatControlsProps) {
   const settings = useSettingsValue();
   const [selectedChain, setSelectedChain] = useChainType();
-  const isPlusUser = useIsPlusUser();
 
-  const handleModeChange = async (chainType: ChainType) => {
-    // If leaving project mode with autosave enabled, save chat BEFORE clearing project context
-    // This ensures the chat is saved with the correct project prefix
-    const isLeavingProjectMode =
-      selectedChain === ChainType.PROJECT_CHAIN && chainType !== ChainType.PROJECT_CHAIN;
-    if (isLeavingProjectMode && settings.autosaveChat) {
-      await onSaveAsNote();
-    }
-
+  const handleModeChange = (chainType: ChainType) => {
     setSelectedChain(chainType);
     onModeChange(chainType);
     if (chainType !== ChainType.PROJECT_CHAIN) {
@@ -233,124 +205,40 @@ export function ChatControls({
 
   return (
     <div className="tw-flex tw-w-full tw-items-center tw-justify-between tw-p-1">
-      <div className="tw-flex-1">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost2" size="fit" className="tw-ml-1 tw-text-sm tw-text-muted">
-              {selectedChain === ChainType.LLM_CHAIN && "chat (free)"}
-              {selectedChain === ChainType.VAULT_QA_CHAIN && "vault QA (free)"}
-              {selectedChain === ChainType.COPILOT_PLUS_CHAIN && (
-                <div className="tw-flex tw-items-center tw-gap-1">
-                  <Sparkles className="tw-size-4" />
-                  copilot plus
-                </div>
-              )}
-              {selectedChain === ChainType.PROJECT_CHAIN && "projects (alpha)"}
-              <ChevronDown className="tw-mt-0.5 tw-size-5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem
-              onSelect={() => {
-                handleModeChange(ChainType.LLM_CHAIN);
-              }}
-            >
-              chat (free)
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                handleModeChange(ChainType.VAULT_QA_CHAIN);
-              }}
-            >
-              vault QA (free)
-            </DropdownMenuItem>
-            {isPlusUser ? (
-              <DropdownMenuItem
-                onSelect={() => {
-                  handleModeChange(ChainType.COPILOT_PLUS_CHAIN);
-                }}
-              >
-                <div className="tw-flex tw-items-center tw-gap-1">
-                  <Sparkles className="tw-size-4" />
-                  copilot plus
-                </div>
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem
-                onSelect={() => {
-                  navigateToPlusPage(PLUS_UTM_MEDIUMS.CHAT_MODE_SELECT);
-                  onCloseProject?.();
-                }}
-              >
-                copilot plus
-                <SquareArrowOutUpRight className="tw-size-3" />
-              </DropdownMenuItem>
-            )}
-
-            {isPlusUser ? (
-              <DropdownMenuItem
-                className="tw-flex tw-items-center tw-gap-1"
-                onSelect={() => {
-                  handleModeChange(ChainType.PROJECT_CHAIN);
-                }}
-              >
-                <LibraryBig className="tw-size-4" />
-                projects (alpha)
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem
-                onSelect={() => {
-                  navigateToPlusPage(PLUS_UTM_MEDIUMS.CHAT_MODE_SELECT);
-                  onCloseProject?.();
-                }}
-              >
-                copilot plus
-                <SquareArrowOutUpRight className="tw-size-3" />
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+      <div className="tw-flex-1" />
       <div className="tw-flex tw-items-center tw-gap-1">
         <div className="tw-mr-2">
           <TokenCounter tokenCount={latestTokenCount ?? null} />
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost2" size="icon" title="New Chat" onClick={onNewChat}>
-              <MessageCirclePlus className="tw-size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>New Chat</TooltipContent>
-        </Tooltip>
-        {selectedChain !== ChainType.PROJECT_CHAIN && <ChatSettingsPopover />}
-        {!settings.autosaveChat && (
+        {onToggleConversationSidebar ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost2" size="icon" title="Save Chat as Note" onClick={onSaveAsNote}>
-                <Download className="tw-size-4" />
+              <Button
+                variant="ghost2"
+                size="icon"
+                title={showConversationSidebar ? "Hide Conversations" : "Show Conversations"}
+                onClick={onToggleConversationSidebar}
+              >
+                {showConversationSidebar ? (
+                  <PanelLeftClose className="tw-size-4" />
+                ) : (
+                  <PanelLeftOpen className="tw-size-4" />
+                )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Save Chat as Note</TooltipContent>
+            <TooltipContent>
+              {showConversationSidebar ? "Hide Conversations" : "Show Conversations"}
+            </TooltipContent>
           </Tooltip>
-        )}
+        ) : null}
         <Tooltip>
-          <ChatHistoryPopover
-            chatHistory={chatHistory}
-            onUpdateTitle={onUpdateChatTitle}
-            onDeleteChat={onDeleteChat}
-            onLoadChat={onLoadChat}
-            onOpenSourceFile={onOpenSourceFile}
-          >
-            <TooltipTrigger asChild>
-              <Button variant="ghost2" size="icon" title="Chat History" onClick={onLoadHistory}>
-                <History className="tw-size-4" />
-              </Button>
-            </TooltipTrigger>
-          </ChatHistoryPopover>
-          <TooltipContent>Chat History</TooltipContent>
+          <TooltipTrigger asChild>
+            <Button variant="ghost2" size="icon" title="Save Chat as Note" onClick={onSaveAsNote}>
+              <Download className="tw-size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Save Chat as Note</TooltipContent>
         </Tooltip>
-
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost2" size="icon" title="Advanced Settings">
@@ -396,6 +284,19 @@ export function ChatControls({
                 Auto-accept Edits
               </div>
               <SettingSwitch checked={settings.autoAcceptEdits} />
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="tw-flex tw-justify-between"
+              onSelect={(e) => {
+                e.preventDefault();
+                updateSetting("enableRecentConversations", !settings.enableRecentConversations);
+              }}
+            >
+              <div className="tw-flex tw-items-center tw-gap-2">
+                <History className="tw-size-4" />
+                Recent Memory (Project)
+              </div>
+              <SettingSwitch checked={settings.enableRecentConversations} />
             </DropdownMenuItem>
             {selectedChain === ChainType.PROJECT_CHAIN ? (
               <>

@@ -2,7 +2,6 @@ import React from "react";
 import { cn } from "@/lib/utils";
 
 export interface TabItem {
-  icon: React.ReactNode;
   label: string;
   id: string;
 }
@@ -11,67 +10,37 @@ interface TabItemProps {
   tab: TabItem;
   isSelected: boolean;
   onClick: () => void;
-  isFirst: boolean;
-  isLast: boolean;
 }
 
-export const TabItem: React.FC<TabItemProps> = ({ tab, isSelected, onClick, isFirst, isLast }) => {
+export const TabItem: React.FC<TabItemProps> = ({ tab, isSelected, onClick }) => {
   return (
-    <div
+    <button
       role="tab"
       id={`tab-${tab.id}`}
       aria-controls={`tabpanel-${tab.id}`}
       aria-selected={isSelected}
       onClick={onClick}
       className={cn(
-        "tw-flex tw-flex-row tw-items-center",
-        "tw-h-8",
-        "tw-px-2 tw-py-1",
-        "tw-gap-1.5",
+        // Layout
+        "tw-relative tw-px-4 tw-py-2 tw-rounded-t-md",
         "tw-cursor-pointer",
-        "tw-overflow-hidden",
-        "tw-whitespace-nowrap",
+        // Typography
         "tw-text-sm",
-        "tw-border tw-border-solid tw-border-border",
-        "tw-rounded-b-[2px] tw-rounded-t-sm",
-        "tw-bg-primary",
-        "tw-transition-all tw-duration-300 tw-ease-in-out",
-        "hover:tw-border-interactive-accent",
-        isSelected && [
-          "!tw-bg-interactive-accent",
-          "tw-text-on-accent",
-          "!tw-max-w-full",
-          "tw-transition-all tw-duration-300 tw-ease-in-out",
-          "tw-delay-100",
-        ],
-        "lg:tw-max-w-32",
-        "md:tw-max-w-32"
+        "tw-transition-all tw-duration-150",
+        // 选中状态：深灰色背景 + 正常文字色
+        // 未选中状态：透明背景 + 灰色文字
+        isSelected
+          ? "tw-font-medium tw-text-normal tw-bg-secondary"
+          : "tw-text-muted hover:tw-text-normal"
       )}
     >
-      <div
-        className={cn(
-          "tw-flex tw-items-center tw-justify-center",
-          "tw-size-4",
-          "tw-transition-transform tw-duration-200 tw-ease-in-out",
-          isSelected
-            ? "tw-max-w-[16px] tw-translate-x-0 tw-opacity-100"
-            : "tw-max-w-0 tw--translate-x-4 tw-opacity-0"
-        )}
-      >
-        {tab.icon}
-      </div>
-      <span
-        className={cn(
-          "tw-text-sm",
-          "tw-font-medium",
-          "tw-transition-all tw-duration-200 tw-ease-in-out",
-          "tw-overflow-hidden tw-whitespace-nowrap",
-          "tw-max-w-[100px] tw-translate-x-0 tw-opacity-100"
-        )}
-      >
-        {tab.label}
-      </span>
-    </div>
+      {tab.label}
+
+      {/* Active indicator - 选中时底部有accent色线 */}
+      {isSelected && (
+        <span className="tw-absolute tw-bottom-0 tw-left-2 tw-right-2 tw-h-[2px] tw-bg-accent tw-rounded-full" />
+      )}
+    </button>
   );
 };
 
@@ -89,11 +58,6 @@ export const TabContent: React.FC<TabContentProps> = ({ id, children, isSelected
       role="tabpanel"
       id={`tabpanel-${id}`}
       aria-labelledby={`tab-${id}`}
-      className={cn(
-        "tw-pt-4",
-        "tw-transition-all tw-duration-200 tw-ease-in-out",
-        isSelected ? "tw-translate-y-0 tw-opacity-100" : "tw-translate-y-2 tw-opacity-0"
-      )}
     >
       {children}
     </div>

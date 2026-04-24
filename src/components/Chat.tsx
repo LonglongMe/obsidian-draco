@@ -17,16 +17,22 @@ import { useProjectContextStatus } from "@/hooks/useProjectContextStatus";
 import { logInfo, logError } from "@/logger";
 import type { WebTabContext } from "@/types/message";
 
-import { ChatControls, reloadCurrentProject } from "@/components/chat-components/ChatControls";
+import { reloadCurrentProject } from "@/components/chat-components/ChatControls";
+import { ChatModalBackdrop } from "@/components/chat-components/ChatModalBackdrop";
+import { ConversationSidebar } from "@/components/chat-components/ConversationSidebar";
+import { CreateProjectDialog } from "@/components/chat-components/CreateProjectDialog";
 import ChatInput from "@/components/chat-components/ChatInput";
-import ChatMessages from "@/components/chat-components/ChatMessages";
 import { NewVersionBanner } from "@/components/chat-components/NewVersionBanner";
+import { ProjectOverviewPanel } from "@/components/chat-components/ProjectOverviewPanel";
 import { ProjectList } from "@/components/chat-components/ProjectList";
+import { ChatThreadColumn } from "@/components/chat-components/ChatThreadColumn";
+import { ChatWorkspace } from "@/components/chat-components/ChatWorkspace";
 import IndexingProgressCard from "@/components/IndexingProgressCard";
 import ProgressCard from "@/components/project/progress-card";
 import {
   ABORT_REASON,
   AI_SENDER,
+  DEFAULT_CHAT_HISTORY_FOLDER,
   EVENT_NAMES,
   LOADING_MESSAGES,
   RESTRICTION_MESSAGES,
@@ -41,7 +47,6 @@ import ChainManager from "@/LLMProviders/chainManager";
 import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
 import { logFileManager } from "@/logFileManager";
 import CopilotPlugin from "@/main";
-import { useIsPlusUser } from "@/plusUtils";
 import { updateSetting, useSettingsValue } from "@/settings/model";
 import { ChatUIState } from "@/state/ChatUIState";
 import { FileParserManager } from "@/tools/FileParserManager";
@@ -50,7 +55,16 @@ import { err2String, isPlusChain } from "@/utils";
 import { arrayBufferToBase64 } from "@/utils/base64";
 import { Notice, TFile } from "obsidian";
 import { ContextManageModal } from "@/components/modals/project/context-manage-modal";
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { flushSync } from "react-dom";
 import { v4 as uuidv4 } from "uuid";
 import { ChatHistoryItem } from "@/components/chat-components/ChatHistoryPopover";
 import { useActiveWebTabState } from "@/components/chat-components/hooks/useActiveWebTabState";
@@ -84,37 +98,82 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
   const [currentModelKey] = useModelKey();
   const [currentChain] = useChainType();
   const [currentAiMessage, setCurrentAiMessage] = useState("");
+  const [currentStreamingMessageId, setCurrentStreamingMessageId] = useState<string | null>(null);
+  const [streamSessionsVersion, setStreamSessionsVersion] = useState(0);
   const [inputMessage, setInputMessage] = useState("");
   const [latestTokenCount, setLatestTokenCount] = useState<number | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  // Stable ID for streaming message, shared with final persisted message
-  // This allows collapsible UI state (think blocks) to persist across streaming -> history
-  const streamingMessageIdRef = useRef<string | null>(null);
+  const activeChatIdRef = useRef<string | null>(null);
+  const selectedSidebarProjectIdRef = useRef<string | null>(null);
+  const currentViewKeyRef = useRef<string>("__draft__::__no_project_page__");
+  const messagesByViewKeyRef = useRef<Map<string, ChatMessage[]>>(new Map());
+  const chatConversationIdByPathRef = useRef<Map<string, string>>(new Map());
+  const chatPathByConversationIdRef = useRef<Map<string, string>>(new Map());
+  const refreshAllChatHistoryRef = useRef<() => Promise<void>>(async () => {});
+  const streamSessionsRef = useRef<
+    Map<
+      string,
+      {
+        abortController: AbortController | null;
+        streamingMessageId: string | null;
+        acceptChunks: boolean;
+        streamingText: string;
+        isLoading: boolean;
+        pendingMessages: ChatMessage[];
+        conversationId: string | null;
+        needsSaveAfterFlush: boolean;
+        lastUiEmitAt: number;
+        lastUiEmitText: string;
+        streamUiRaf: number | null;
+      }
+    >
+  >(new Map());
+  const getStreamSession = useCallback((viewKey: string) => {
+    const existing = streamSessionsRef.current.get(viewKey);
+    if (existing) return existing;
+    const created = {
+      abortController: null as AbortController | null,
+      streamingMessageId: null as string | null,
+      acceptChunks: false,
+      streamingText: "",
+      isLoading: false,
+      pendingMessages: [] as ChatMessage[],
+      conversationId: null as string | null,
+      needsSaveAfterFlush: false,
+      lastUiEmitAt: 0,
+      lastUiEmitText: "",
+      streamUiRaf: null as number | null,
+    };
+    streamSessionsRef.current.set(viewKey, created);
+    return created;
+  }, []);
+  const bumpStreamSessionsVersion = useCallback(() => {
+    setStreamSessionsVersion((version) => version + 1);
+  }, []);
 
-  // Wrapper for addMessage that attaches streaming ID and tracks token usage
-  const addMessage = useCallback(
-    (message: ChatMessage) => {
-      // Attach streaming ID to final AI message so it shares the same ID as streaming placeholder
-      const streamingId = streamingMessageIdRef.current;
+  const createScopedAddMessage = useCallback(
+    (viewKey: string) => (message: ChatMessage) => {
+      const session = getStreamSession(viewKey);
       const shouldAttachId =
-        streamingId && message.sender === AI_SENDER && !message.isErrorMessage && !message.id;
-      const messageToAdd = shouldAttachId ? { ...message, id: streamingId } : message;
+        session.streamingMessageId &&
+        message.sender === AI_SENDER &&
+        !message.isErrorMessage &&
+        !message.id;
+      const messageToAdd = shouldAttachId
+        ? { ...message, id: session.streamingMessageId as string }
+        : message;
+
+      if (currentViewKeyRef.current !== viewKey && messageToAdd.sender === AI_SENDER && !messageToAdd.isErrorMessage) {
+        session.pendingMessages.push(messageToAdd);
+        return;
+      }
 
       rawAddMessage(messageToAdd);
-      if (
-        messageToAdd.sender === AI_SENDER &&
-        messageToAdd.responseMetadata?.tokenUsage?.totalTokens
-      ) {
+      if (messageToAdd.sender === AI_SENDER && messageToAdd.responseMetadata?.tokenUsage?.totalTokens) {
         setLatestTokenCount(messageToAdd.responseMetadata.tokenUsage.totalTokens);
       }
     },
-    [rawAddMessage]
+    [getStreamSession, rawAddMessage]
   );
-
-  // Function to set the abort controller ref (for getAIResponse compatibility)
-  const setAbortController = useCallback((controller: AbortController | null) => {
-    abortControllerRef.current = controller;
-  }, []);
 
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES.DEFAULT);
@@ -123,7 +182,19 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
   const [includeActiveWebTab, setIncludeActiveWebTab] = useState(false);
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [showChatUI, setShowChatUI] = useState(false);
-  const [chatHistoryItems, setChatHistoryItems] = useState<ChatHistoryItem[]>([]);
+  const [allChatHistoryItems, setAllChatHistoryItems] = useState<ChatHistoryItem[]>([]);
+  const [showConversationSidebar, setShowConversationSidebar] = useState(true);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [selectedSidebarProjectId, setSelectedSidebarProjectId] = useState<string | null>(null);
+  const [draftSessionId, setDraftSessionId] = useState<string>(() => uuidv4());
+  const currentViewKey = useMemo(
+    () =>
+      `${activeChatId ?? `__draft__:${draftSessionId}`}::${selectedSidebarProjectId ?? "__no_project_page__"}`,
+    [activeChatId, selectedSidebarProjectId, draftSessionId]
+  );
+
+  const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
   // null: keep default behavior; true: show; false: hide
   const [progressCardVisible, setProgressCardVisible] = useState<boolean | null>(null);
   const [indexingCardVisible, setIndexingCardVisible] = useState<boolean | null>(null);
@@ -155,6 +226,103 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     }),
     []
   );
+
+  const scheduleStreamUiFlush = useCallback(
+    (viewKey: string) => {
+      const session = getStreamSession(viewKey);
+      if (session.streamUiRaf != null) {
+        return;
+      }
+      session.streamUiRaf = window.requestAnimationFrame(() => {
+        session.streamUiRaf = null;
+        if (!session.acceptChunks) return;
+        if (currentViewKeyRef.current !== viewKey) return;
+        safeSet.setCurrentAiMessage(session.streamingText);
+      });
+    },
+    [getStreamSession, safeSet]
+  );
+
+  const createScopedStreamUpdater = useCallback(
+    (viewKey: string) => (value: string) => {
+      const session = getStreamSession(viewKey);
+      if (!session.acceptChunks) return;
+      session.streamingText = value;
+      if (currentViewKeyRef.current === viewKey) {
+        scheduleStreamUiFlush(viewKey);
+      }
+    },
+    [getStreamSession, scheduleStreamUiFlush]
+  );
+
+  const createScopedAbortSetter = useCallback(
+    (viewKey: string) => (controller: AbortController | null) => {
+      const session = getStreamSession(viewKey);
+      session.abortController = controller;
+    },
+    [getStreamSession]
+  );
+
+  // Must run in useLayoutEffect: if this runs in useEffect, the first await inside
+  // handleSendMessage yields before paint, and an empty per-view cache can replaceMessages([])
+  // and wipe the user message that was just added.
+  useLayoutEffect(() => {
+    activeChatIdRef.current = activeChatId;
+    selectedSidebarProjectIdRef.current = selectedSidebarProjectId;
+    currentViewKeyRef.current = currentViewKey;
+
+    const session = getStreamSession(currentViewKey);
+    const cachedMessages = messagesByViewKeyRef.current.get(currentViewKey) || [];
+    chatUIState.replaceMessages(cachedMessages);
+    safeSet.setCurrentAiMessage(session.streamingText);
+    safeSet.setLoading(session.isLoading);
+    setCurrentStreamingMessageId(session.streamingMessageId);
+    if (session.pendingMessages.length > 0) {
+      const pending = [...session.pendingMessages];
+      session.pendingMessages = [];
+      pending.forEach((message) => rawAddMessage(message));
+      if (session.needsSaveAfterFlush) {
+        void (async () => {
+          await chatUIState.saveChat(currentModelKey, {
+            silent: true,
+            conversationId: session.conversationId || undefined,
+            messages: chatUIState.getMessages(),
+          });
+          if (!session.conversationId) {
+            session.conversationId = chatUIState.getCurrentConversationId();
+          }
+          const historyItems = await plugin.getAllChatHistoryItems();
+          const conversationByPath = new Map<string, string>();
+          const pathByConversation = new Map<string, string>();
+          for (const item of historyItems) {
+            const conversationId = item.conversationId?.trim();
+            if (!conversationId) continue;
+            conversationByPath.set(item.id, conversationId);
+            pathByConversation.set(conversationId, item.id);
+          }
+          chatConversationIdByPathRef.current = conversationByPath;
+          chatPathByConversationIdRef.current = pathByConversation;
+          setAllChatHistoryItems(historyItems);
+          session.needsSaveAfterFlush = false;
+        })();
+      }
+    }
+  }, [
+    activeChatId,
+    selectedSidebarProjectId,
+    draftSessionId,
+    currentViewKey,
+    getStreamSession,
+    rawAddMessage,
+    safeSet,
+    chatUIState,
+    currentModelKey,
+    plugin,
+  ]);
+
+  useEffect(() => {
+    messagesByViewKeyRef.current.set(currentViewKeyRef.current, [...chatHistory]);
+  }, [chatHistory]);
 
   const [selectedTextContexts] = useSelectedTextContexts();
 
@@ -234,7 +402,6 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
 
   const [previousMode, setPreviousMode] = useState<ChainType | null>(null);
   const [selectedChain, setSelectedChain] = useChainType();
-  const isPlusUser = useIsPlusUser();
 
   const appContext = useContext(AppContext);
   const app = plugin.app || appContext;
@@ -249,22 +416,31 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     containerRef: chatContainerRef,
   });
 
-  const handleSendMessage = async ({
-    toolCalls,
-    urls,
-    contextNotes: passedContextNotes,
-    contextTags,
-    contextFolders,
-    webTabs,
-  }: {
-    toolCalls?: string[];
-    urls?: string[];
-    contextNotes?: TFile[];
-    contextTags?: string[];
-    contextFolders?: string[];
-    webTabs?: WebTabContext[];
-  } = {}) => {
+  const handleSendMessage = async (
+    {
+      toolCalls,
+      urls,
+      contextNotes: passedContextNotes,
+      contextTags,
+      contextFolders,
+      webTabs,
+    }: {
+      toolCalls?: string[];
+      urls?: string[];
+      contextNotes?: TFile[];
+      contextTags?: string[];
+      contextFolders?: string[];
+      webTabs?: WebTabContext[];
+    } = {},
+    /** When sending from the project overview composer, pin this project into note frontmatter. */
+    projectForFrontmatter?: ProjectConfig | null
+  ) => {
     if (!inputMessage && selectedImages.length === 0) return;
+    const saveProjectOpt =
+      projectForFrontmatter !== undefined ? { projectForFrontmatter } : {};
+    const streamViewKey = currentViewKeyRef.current;
+    let effectiveStreamViewKey = streamViewKey;
+    const streamSession = getStreamSession(streamViewKey);
 
     // Check for URL restrictions in non-Plus chains and show notice, but continue processing
     const hasUrlsInContext = urls && urls.length > 0;
@@ -325,12 +501,24 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       // Clear input and images
       setInputMessage("");
       setSelectedImages([]);
-      streamingMessageIdRef.current = `msg-${uuidv4()}`;
-      safeSet.setLoading(true);
-      safeSet.setLoadingMessage(LOADING_MESSAGES.DEFAULT);
+      streamSession.streamingMessageId = `msg-${uuidv4()}`;
+      streamSession.acceptChunks = true;
+      streamSession.isLoading = true;
+      streamSession.streamingText = "";
+      streamSession.lastUiEmitAt = 0;
+      streamSession.lastUiEmitText = "";
+      streamSession.conversationId =
+        streamSession.conversationId ?? chatUIState.getCurrentConversationId() ?? uuidv4();
+      bumpStreamSessionsVersion();
+      if (currentViewKeyRef.current === streamViewKey) {
+        setCurrentStreamingMessageId(streamSession.streamingMessageId);
+        safeSet.setCurrentAiMessage("");
+        safeSet.setLoading(true);
+        safeSet.setLoadingMessage(LOADING_MESSAGES.DEFAULT);
+      }
 
       // Send message through ChatManager (this handles all the complex context processing)
-      const messageId = await chatUIState.sendMessage(
+      const { messageId, displayMessagesSnapshot } = await chatUIState.sendMessage(
         displayText,
         context,
         currentChain,
@@ -340,15 +528,68 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
         safeSet.setLoadingMessage
       );
 
+      // Ensure chat identity is persisted immediately after each user send.
+      // This keeps conversation markdown available even if user switches chat before AI completes.
+      await chatUIState.saveChat(currentModelKey, {
+        silent: true,
+        skipTopicGeneration: true,
+        conversationId: streamSession.conversationId || undefined,
+        messages: displayMessagesSnapshot,
+        ...saveProjectOpt,
+      });
+      await handleLoadAllChatHistory();
+
+      // Bind draft UI sessions to the saved note path so stream state / per-view message caches
+      // stay aligned when opening this chat from the sidebar (file path key vs __draft__ key).
+      const convIdForPath = streamSession.conversationId;
+      const canPromoteDraftToSavedChat =
+        streamViewKey.startsWith("__draft__:") && selectedSidebarProjectIdRef.current == null;
+      if (convIdForPath && canPromoteDraftToSavedChat) {
+        let savedChatPath = chatPathByConversationIdRef.current.get(convIdForPath);
+        if (!savedChatPath) {
+          savedChatPath = `${DEFAULT_CHAT_HISTORY_FOLDER}/${convIdForPath}.md`;
+        }
+        const migratedKey = `${savedChatPath}::__no_project_page__`;
+        if (migratedKey !== streamViewKey) {
+          const oldKey = streamViewKey;
+          const sess = streamSessionsRef.current.get(oldKey);
+          if (sess) {
+            streamSessionsRef.current.set(migratedKey, sess);
+            streamSessionsRef.current.delete(oldKey);
+          }
+          const cachedMsgs = messagesByViewKeyRef.current.get(oldKey);
+          if (cachedMsgs !== undefined) {
+            messagesByViewKeyRef.current.set(migratedKey, [...cachedMsgs]);
+            messagesByViewKeyRef.current.delete(oldKey);
+          }
+          effectiveStreamViewKey = migratedKey;
+          const stillOnThisConversation = currentViewKeyRef.current === oldKey;
+          if (stillOnThisConversation) {
+            setSelectedSidebarProjectId(null);
+            activeChatIdRef.current = savedChatPath;
+            selectedSidebarProjectIdRef.current = null;
+            currentViewKeyRef.current = migratedKey;
+            setActiveChatId(savedChatPath);
+          }
+          bumpStreamSessionsVersion();
+        }
+      }
+
+      const scopedAddMessage = createScopedAddMessage(effectiveStreamViewKey);
+      const scopedStreamUpdater = createScopedStreamUpdater(effectiveStreamViewKey);
+      const scopedAbortSetter = createScopedAbortSetter(effectiveStreamViewKey);
+      const scopedLoadingMessageUpdater = (message: string) => {
+        if (currentViewKeyRef.current === effectiveStreamViewKey) {
+          safeSet.setLoadingMessage(message);
+        }
+      };
+
       // Add to user message history
       if (inputMessage) {
         updateUserMessageHistory(inputMessage);
       }
 
-      // Autosave if enabled
-      if (settings.autosaveChat) {
-        handleSaveAsNote();
-      }
+      // User turn is persisted by the silent save above; the post-stream save persists the full thread.
 
       // Get the LLM message for AI processing
       const llmMessage = chatUIState.getLLMMessage(messageId);
@@ -356,24 +597,49 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
         await getAIResponse(
           llmMessage,
           chainManager,
-          addMessage,
-          safeSet.setCurrentAiMessage,
-          setAbortController,
-          { debug: settings.debug, updateLoadingMessage: safeSet.setLoadingMessage }
+          scopedAddMessage,
+          scopedStreamUpdater,
+          scopedAbortSetter,
+          { debug: settings.debug, updateLoadingMessage: scopedLoadingMessageUpdater }
         );
       }
 
-      // Autosave again after AI response
-      if (settings.autosaveChat) {
-        handleSaveAsNote();
+      // After first AI response, persist again and allow AI title generation + rename.
+      if (currentViewKeyRef.current === effectiveStreamViewKey) {
+        await chatUIState.saveChat(currentModelKey, {
+          silent: true,
+          conversationId: streamSession.conversationId || undefined,
+          messages: chatUIState.getMessages(),
+          ...saveProjectOpt,
+        });
+        await handleLoadAllChatHistory();
+      } else {
+        // The repository is shared; if user switched view, persist when this view is resumed.
+        streamSession.needsSaveAfterFlush = true;
       }
     } catch (error) {
       logError("Error sending message:", error);
       new Notice("Failed to send message. Please try again.");
     } finally {
-      safeSet.setLoading(false);
-      safeSet.setLoadingMessage(LOADING_MESSAGES.DEFAULT);
-      streamingMessageIdRef.current = null;
+      if (streamSession.streamUiRaf != null) {
+        window.cancelAnimationFrame(streamSession.streamUiRaf);
+        streamSession.streamUiRaf = null;
+      }
+      streamSession.acceptChunks = false;
+      streamSession.abortController = null;
+      streamSession.isLoading = false;
+      streamSession.streamingMessageId = null;
+      bumpStreamSessionsVersion();
+      if (currentViewKeyRef.current === effectiveStreamViewKey) {
+        safeSet.setCurrentAiMessage(streamSession.streamingText);
+        safeSet.setLoading(false);
+        safeSet.setLoadingMessage(LOADING_MESSAGES.DEFAULT);
+        setCurrentStreamingMessageId(null);
+      }
+      const pathFromKey = effectiveStreamViewKey.split("::")[0];
+      if (!pathFromKey.startsWith("__draft__:") && currentViewKeyRef.current === effectiveStreamViewKey) {
+        void plugin.touchChatHistoryByPathIfExists(pathFromKey).then(() => refreshAllChatHistoryRef.current());
+      }
     }
   };
 
@@ -386,24 +652,34 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     try {
       // Use the new ChatManager persistence functionality
       await chatUIState.saveChat(currentModelKey);
+      const allHistoryItems = await plugin.getAllChatHistoryItems();
+      setAllChatHistoryItems(allHistoryItems);
     } catch (error) {
       logError("Error saving chat as note:", err2String(error));
       new Notice("Failed to save chat as note. Check console for details.");
     }
-  }, [app, chatUIState, currentModelKey]);
+  }, [app, chatUIState, currentModelKey, plugin]);
 
   const handleStopGenerating = useCallback(
     (reason?: ABORT_REASON) => {
-      if (abortControllerRef.current) {
+      const viewKey = currentViewKeyRef.current;
+      const session = getStreamSession(viewKey);
+      if (session.abortController) {
+        session.acceptChunks = false;
         logInfo(`stopping generation..., reason: ${reason}`);
-        abortControllerRef.current.abort(reason);
+        session.abortController.abort(reason);
+        session.abortController = null;
+        session.isLoading = false;
+        session.streamingMessageId = null;
+        bumpStreamSessionsVersion();
         safeSet.setLoading(false);
         safeSet.setLoadingMessage(LOADING_MESSAGES.DEFAULT);
+        setCurrentStreamingMessageId(null);
         // Keep the partial AI message visible
         // Don't clear setCurrentAiMessage here
       }
     },
-    [safeSet]
+    [getStreamSession, safeSet]
   );
 
   // Cleanup on unmount - abort any ongoing streaming
@@ -412,8 +688,9 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     return () => {
       isMountedRef.current = false;
       // Abort any ongoing streaming when component unmounts
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort(ABORT_REASON.UNMOUNT);
+      for (const session of streamSessionsRef.current.values()) {
+        session.abortController?.abort(ABORT_REASON.UNMOUNT);
+        session.abortController = null;
       }
     };
   }, []); // No dependencies - only run on mount/unmount
@@ -432,14 +709,23 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       }
 
       // Clear current AI message and set loading state
+      const streamViewKey = currentViewKeyRef.current;
+      const streamSession = getStreamSession(streamViewKey);
+      const scopedAddMessage = createScopedAddMessage(streamViewKey);
+      const scopedStreamUpdater = createScopedStreamUpdater(streamViewKey);
+      streamSession.streamingMessageId = `msg-${uuidv4()}`;
+      streamSession.acceptChunks = true;
+      streamSession.isLoading = true;
+      streamSession.streamingText = "";
+      bumpStreamSessionsVersion();
       safeSet.setCurrentAiMessage("");
-      streamingMessageIdRef.current = `msg-${uuidv4()}`;
+      setCurrentStreamingMessageId(streamSession.streamingMessageId);
       safeSet.setLoading(true);
       try {
         const success = await chatUIState.regenerateMessage(
           messageToRegenerate.id!,
-          safeSet.setCurrentAiMessage,
-          addMessage
+          scopedStreamUpdater,
+          scopedAddMessage
         );
 
         if (!success) {
@@ -447,27 +733,33 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
         } else if (settings.debug) {
           console.log("Message regenerated successfully");
         }
-
-        // Autosave the chat if the setting is enabled
-        if (settings.autosaveChat) {
-          handleSaveAsNote();
-        }
       } catch (error) {
         logError("Error regenerating message:", error);
         new Notice("Failed to regenerate message. Please try again.");
       } finally {
+        streamSession.acceptChunks = false;
+        streamSession.abortController = null;
+        streamSession.isLoading = false;
+        streamSession.streamingMessageId = null;
+        bumpStreamSessionsVersion();
         safeSet.setLoading(false);
-        streamingMessageIdRef.current = null;
+        setCurrentStreamingMessageId(null);
+        const pathFromKey = streamViewKey.split("::")[0];
+        if (!pathFromKey.startsWith("__draft__:") && currentViewKeyRef.current === streamViewKey) {
+          void plugin.touchChatHistoryByPathIfExists(pathFromKey).then(() => refreshAllChatHistoryRef.current());
+        }
       }
     },
     [
       chatHistory,
       chatUIState,
       settings.debug,
-      settings.autosaveChat,
-      handleSaveAsNote,
-      addMessage,
+      createScopedAddMessage,
+      createScopedStreamUpdater,
+      getStreamSession,
+      bumpStreamSessionsVersion,
       safeSet,
+      plugin,
     ]
   );
 
@@ -501,7 +793,25 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
 
           // If there were AI responses, generate new ones
           if (hadAIResponses) {
-            streamingMessageIdRef.current = `msg-${uuidv4()}`;
+            const streamViewKey = currentViewKeyRef.current;
+            const streamSession = getStreamSession(streamViewKey);
+            const scopedAddMessage = createScopedAddMessage(streamViewKey);
+            const scopedStreamUpdater = createScopedStreamUpdater(streamViewKey);
+            const scopedAbortSetter = createScopedAbortSetter(streamViewKey);
+            const scopedLoadingMessageUpdater = (message: string) => {
+              if (currentViewKeyRef.current === streamViewKey) {
+                safeSet.setLoadingMessage(message);
+              }
+            };
+            streamSession.streamingMessageId = `msg-${uuidv4()}`;
+            streamSession.acceptChunks = true;
+            streamSession.isLoading = true;
+            streamSession.streamingText = "";
+            bumpStreamSessionsVersion();
+            if (currentViewKeyRef.current === streamViewKey) {
+              setCurrentStreamingMessageId(streamSession.streamingMessageId);
+              safeSet.setCurrentAiMessage("");
+            }
             safeSet.setLoading(true);
             try {
               const llmMessage = chatUIState.getLLMMessage(messageToEdit.id!);
@@ -509,25 +819,31 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
                 await getAIResponse(
                   llmMessage,
                   chainManager,
-                  addMessage,
-                  safeSet.setCurrentAiMessage,
-                  setAbortController,
-                  { debug: settings.debug, updateLoadingMessage: safeSet.setLoadingMessage }
+                  scopedAddMessage,
+                  scopedStreamUpdater,
+                  scopedAbortSetter,
+                  { debug: settings.debug, updateLoadingMessage: scopedLoadingMessageUpdater }
                 );
               }
             } catch (error) {
               logError("Error regenerating AI response:", error);
               new Notice("Failed to regenerate AI response. Please try again.");
             } finally {
+              streamSession.acceptChunks = false;
+              streamSession.abortController = null;
+              streamSession.isLoading = false;
+              streamSession.streamingMessageId = null;
+              bumpStreamSessionsVersion();
               safeSet.setLoading(false);
-              streamingMessageIdRef.current = null;
+              if (currentViewKeyRef.current === streamViewKey) {
+                setCurrentStreamingMessageId(null);
+              }
+              const pathFromKey = streamViewKey.split("::")[0];
+              if (!pathFromKey.startsWith("__draft__:") && currentViewKeyRef.current === streamViewKey) {
+                void plugin.touchChatHistoryByPathIfExists(pathFromKey).then(() => refreshAllChatHistoryRef.current());
+              }
             }
           }
-        }
-
-        // Autosave the chat if the setting is enabled
-        if (settings.autosaveChat) {
-          handleSaveAsNote();
         }
       } catch (error) {
         logError("Error editing message:", error);
@@ -539,15 +855,29 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       chatUIState,
       currentChain,
       effectiveIncludeActiveNote,
-      addMessage,
       chainManager,
       settings.debug,
-      settings.autosaveChat,
-      handleSaveAsNote,
+      createScopedAddMessage,
+      createScopedAbortSetter,
+      plugin,
+      createScopedStreamUpdater,
+      getStreamSession,
+      bumpStreamSessionsVersion,
       safeSet,
-      setAbortController,
     ]
   );
+
+  const runningChatIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [viewKey, session] of streamSessionsRef.current.entries()) {
+      if (!session.isLoading) continue;
+      const chatId = viewKey.split("::")[0];
+      if (chatId && chatId !== "__draft__") {
+        ids.add(chatId);
+      }
+    }
+    return Array.from(ids);
+  }, [streamSessionsVersion]);
 
   // Expose handleSaveAsNote to parent
   useEffect(() => {
@@ -624,6 +954,33 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     [settings.projectList]
   );
 
+  const handleDeleteProjectFromSidebar = useCallback(
+    (projectId: string) => {
+      const updatedProjects = (settings.projectList || []).filter((project) => project.id !== projectId);
+      updateSetting("projectList", updatedProjects);
+      if (selectedSidebarProjectId === projectId) {
+        setSelectedSidebarProjectId(null);
+      }
+      if (getCurrentProject()?.id === projectId) {
+        setCurrentProject(null);
+      }
+      new Notice("Project deleted.");
+    },
+    [selectedSidebarProjectId, settings.projectList]
+  );
+
+  const handleToggleProjectPin = useCallback(
+    (projectId: string) => {
+      const updatedProjects = (settings.projectList || []).map((project) =>
+        project.id === projectId
+          ? ({ ...project, pinned: !(project as ProjectConfig & { pinned?: boolean }).pinned } as ProjectConfig)
+          : project
+      );
+      updateSetting("projectList", updatedProjects);
+    },
+    [settings.projectList]
+  );
+
   const handleRemoveSelectedText = useCallback(
     (id: string) => {
       // Get fresh state to avoid stale closure issues (fixes race condition on rapid removals)
@@ -683,12 +1040,14 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
   );
 
   const handleNewChat = useCallback(async () => {
+    // Top-left new chat always creates a non-project chat.
+    setSelectedSidebarProjectId(null);
+    setCurrentProject(null);
     clearRecordedPromptPayload();
     await logFileManager.clear();
-    handleStopGenerating(ABORT_REASON.NEW_CHAT);
 
     // Analyze chat messages for memory if enabled
-    if (settings.enableRecentConversations) {
+    if (settings.enableRecentConversations && selectedChain === ChainType.PROJECT_CHAIN) {
       try {
         // Get the current chat model from the chain manager
         const chatModel = chainManager.chatModelManager.getChatModel();
@@ -698,13 +1057,8 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       }
     }
 
-    // First autosave the current chat if the setting is enabled
-    if (settings.autosaveChat) {
-      await handleSaveAsNote();
-    }
-
-    // Clear messages through the new architecture
-    chatUIState.clearMessages();
+    // Start a brand new conversation lineage without interrupting background sessions.
+    chatUIState.resetCurrentConversationBinding();
 
     // Reset all session-level system prompt settings to global defaults
     resetSessionSystemPromptSettings();
@@ -712,6 +1066,11 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     // Additional UI state reset specific to this component
     safeSet.setCurrentAiMessage("");
     setContextNotes([]);
+    const nextDraftSessionId = uuidv4();
+    const nextViewKey = `__draft__:${nextDraftSessionId}::__no_project_page__`;
+    messagesByViewKeyRef.current.set(nextViewKey, []);
+    setActiveChatId(null);
+    setDraftSessionId(nextDraftSessionId);
     setLatestTokenCount(null); // Clear token count on new chat
     // Capture web selection URL before clearing for suppression
     const webSelectionUrl = selectedTextContexts.find((ctx) => ctx.sourceType === "web")?.url;
@@ -721,89 +1080,259 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     // Suppress web selection to prevent it from reappearing in new chat
     plugin.suppressCurrentWebSelection(webSelectionUrl);
     // Respect the autoAddActiveContentToContext setting for all non-project chains
-    if (selectedChain === ChainType.PROJECT_CHAIN) {
-      setIncludeActiveNote(false);
-      setIncludeActiveWebTab(false);
-    } else {
-      setIncludeActiveNote(settings.autoAddActiveContentToContext);
-      setIncludeActiveWebTab(settings.autoAddActiveContentToContext);
-    }
+    setIncludeActiveNote(false);
+    setIncludeActiveWebTab(false);
   }, [
-    handleStopGenerating,
     chainManager.chatModelManager,
     chatUIState,
-    settings.autosaveChat,
     settings.enableRecentConversations,
-    settings.autoAddActiveContentToContext,
     selectedChain,
-    handleSaveAsNote,
     safeSet,
     plugin,
     selectedTextContexts,
   ]);
 
-  const handleLoadChatHistory = useCallback(async () => {
+  const handleLoadAllChatHistory = useCallback(async () => {
     try {
-      const historyItems = await plugin.getChatHistoryItems();
-      setChatHistoryItems(historyItems);
+      const historyItems = await plugin.getAllChatHistoryItems();
+      const conversationByPath = new Map<string, string>();
+      const pathByConversation = new Map<string, string>();
+      for (const item of historyItems) {
+        const conversationId = item.conversationId?.trim();
+        if (!conversationId) continue;
+        conversationByPath.set(item.id, conversationId);
+        pathByConversation.set(conversationId, item.id);
+      }
+      chatConversationIdByPathRef.current = conversationByPath;
+      chatPathByConversationIdRef.current = pathByConversation;
+      setAllChatHistoryItems(historyItems);
     } catch (error) {
-      logError("Error loading chat history:", error);
-      new Notice("Failed to load chat history.");
+      logError("Error loading all chat history:", error);
     }
   }, [plugin]);
 
-  const handleUpdateChatTitle = useCallback(
-    async (id: string, newTitle: string) => {
-      try {
-        await plugin.updateChatTitle(id, newTitle);
-        await handleLoadChatHistory(); // Refresh the list
-      } catch (error) {
-        logError("Error updating chat title:", error);
-        new Notice("Failed to update chat title.");
-        throw error; // Re-throw to let the popover handle the error state
-      }
-    },
-    [plugin, handleLoadChatHistory]
-  );
+  useEffect(() => {
+    refreshAllChatHistoryRef.current = handleLoadAllChatHistory;
+  }, [handleLoadAllChatHistory]);
 
   const handleDeleteChat = useCallback(
     async (id: string) => {
       try {
         await plugin.deleteChatHistory(id);
-        await handleLoadChatHistory(); // Refresh the list
+        if (activeChatId === id) {
+          setActiveChatId(null);
+        }
+        await handleLoadAllChatHistory();
       } catch (error) {
         logError("Error deleting chat:", error);
         new Notice("Failed to delete chat.");
         throw error; // Re-throw to let the popover handle the error state
       }
     },
-    [plugin, handleLoadChatHistory]
+    [plugin, handleLoadAllChatHistory, activeChatId]
   );
 
   const handleLoadChat = useCallback(
     async (id: string) => {
-      try {
-        await plugin.loadChatById(id);
+      const resolveLatestChatPath = (chatId: string): string => {
+        const conversationId = chatConversationIdByPathRef.current.get(chatId);
+        if (!conversationId) return chatId;
+        return chatPathByConversationIdRef.current.get(conversationId) || chatId;
+      };
+
+      const loadById = async (chatId: string) => {
+        safeSet.setCurrentAiMessage("");
+        await plugin.loadChatById(chatId);
+        messagesByViewKeyRef.current.set(`${chatId}::__no_project_page__`, [...chatUIState.getMessages()]);
+        setActiveChatId(chatId);
+        setSelectedSidebarProjectId(null);
+        // Opening a chat from sidebar exits project page state.
+        setCurrentProject(null);
         // Reset all session-level system prompt settings to global defaults when loading a chat
         resetSessionSystemPromptSettings();
+      };
+
+      try {
+        await loadById(id);
+        await handleLoadAllChatHistory();
       } catch (error) {
+        const latestPath = resolveLatestChatPath(id);
+        if (latestPath !== id) {
+          try {
+            await loadById(latestPath);
+            await handleLoadAllChatHistory();
+            return;
+          } catch (retryError) {
+            logError("Error loading chat after path remap:", retryError);
+          }
+        }
         logError("Error loading chat:", error);
         new Notice("Failed to load chat.");
       }
     },
-    [plugin]
+    [plugin, handleLoadAllChatHistory, safeSet, chatUIState]
   );
 
-  const handleOpenSourceFile = useCallback(
-    async (id: string) => {
+  const handleToggleChatPin = useCallback(
+    async (id: string, pinned: boolean) => {
       try {
-        await plugin.openChatSourceFile(id);
+        await plugin.setChatPinned(id, pinned);
+        await handleLoadAllChatHistory();
       } catch (error) {
-        logError("Error opening source file:", error);
-        new Notice("Failed to open source file.");
+        logError("Error updating chat pin:", error);
+        new Notice("Failed to update chat pin.");
       }
     },
-    [plugin]
+    [plugin, handleLoadAllChatHistory]
+  );
+
+  const handleAssignChatProject = useCallback(
+    async (id: string, projectId: string | null) => {
+      try {
+        await plugin.setChatProject(id, projectId);
+        await handleLoadAllChatHistory();
+      } catch (error) {
+        logError("Error assigning chat project:", error);
+        new Notice("Failed to assign chat to project.");
+      }
+    },
+    [plugin, handleLoadAllChatHistory]
+  );
+
+  const handleRenameChat = useCallback(
+    async (id: string, title: string) => {
+      try {
+        await plugin.updateChatTitle(id, title);
+        await handleLoadAllChatHistory();
+      } catch (error) {
+        logError("Error renaming chat:", error);
+        new Notice("Failed to rename chat.");
+      }
+    },
+    [plugin, handleLoadAllChatHistory]
+  );
+
+  const handleEditProjectFromSidebar = useCallback(
+    (projectId: string) => {
+      const project = (settings.projectList || []).find((item) => item.id === projectId);
+      if (!project) return;
+      new ContextManageModal(
+        app,
+        (updatedProject) => {
+          handleEditProject(project, updatedProject);
+        },
+        project
+      ).open();
+    },
+    [settings.projectList, app, handleEditProject]
+  );
+
+  /**
+   * Rename a project from sidebar menu.
+   */
+  const handleRenameProjectFromSidebar = useCallback(
+    (projectId: string, currentName: string) => {
+      const nextName = window.prompt("Rename project", currentName)?.trim();
+      if (!nextName || nextName === currentName) return;
+
+      const hasDuplicate = (settings.projectList || []).some(
+        (project) => project.id !== projectId && project.name === nextName
+      );
+      if (hasDuplicate) {
+        new Notice(`Project "${nextName}" already exists`);
+        return;
+      }
+
+      const updatedProjects = (settings.projectList || []).map((project) =>
+        project.id === projectId ? { ...project, name: nextName } : project
+      );
+      updateSetting("projectList", updatedProjects);
+
+      if (getCurrentProject()?.id === projectId) {
+        const updatedCurrent = updatedProjects.find((project) => project.id === projectId) || null;
+        setCurrentProject(updatedCurrent);
+      }
+      new Notice("Project renamed.");
+    },
+    [settings.projectList]
+  );
+
+  const handleSelectProjectFromSidebar = useCallback(
+    (projectId: string) => {
+      // Enter project page only. Do not switch currentProject yet to avoid
+      // accidentally binding current chat history to this project.
+      safeSet.setCurrentAiMessage("");
+      setSelectedSidebarProjectId(projectId);
+      setActiveChatId(null);
+      const nextDraftSessionId = uuidv4();
+      messagesByViewKeyRef.current.set(`__draft__:${nextDraftSessionId}::__no_project_page__`, []);
+      setDraftSessionId(nextDraftSessionId);
+      setCurrentProject(null);
+    },
+    [safeSet]
+  );
+
+  /**
+   * Create a new project from sidebar quick action.
+   */
+  const handleCreateProjectFromSidebar = useCallback(() => {
+    setIsCreateProjectDialogOpen(true);
+  }, []);
+
+  /**
+   * Confirm create project from dialog and enter project page.
+   */
+  const handleConfirmCreateProject = useCallback(() => {
+    const name = newProjectName.trim();
+    if (!name) {
+      new Notice("Project name is required");
+      return;
+    }
+    if ((settings.projectList || []).some((project) => project.name === name)) {
+      new Notice(`Project "${name}" already exists`);
+      return;
+    }
+
+    const newProject: ProjectConfig = {
+      id: uuidv4(),
+      name,
+      description: "",
+      systemPrompt: "",
+      projectModelKey: currentModelKey,
+      modelConfigs: {},
+      contextSource: {
+        inclusions: "",
+        exclusions: "",
+        webUrls: "",
+        youtubeUrls: "",
+      },
+      created: Date.now(),
+      UsageTimestamps: Date.now(),
+    };
+
+    updateSetting("projectList", [...(settings.projectList || []), newProject]);
+    setSelectedSidebarProjectId(newProject.id);
+    setCurrentProject(newProject);
+    setActiveChatId(null);
+    setNewProjectName("");
+    setIsCreateProjectDialogOpen(false);
+  }, [newProjectName, settings.projectList, currentModelKey]);
+
+  /**
+   * Update one project config in settings and current project atom.
+   */
+  const handleUpdateProjectConfig = useCallback(
+    (projectId: string, updater: (project: ProjectConfig) => ProjectConfig) => {
+      const updatedProjects = (settings.projectList || []).map((project) =>
+        project.id === projectId ? updater(project) : project
+      );
+      updateSetting("projectList", updatedProjects);
+      if (getCurrentProject()?.id === projectId) {
+        const updatedCurrent = updatedProjects.find((project) => project.id === projectId) || null;
+        setCurrentProject(updatedCurrent);
+      }
+    },
+    [settings.projectList]
   );
 
   // Event listener for abort stream events
@@ -821,122 +1350,205 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     };
   }, [eventTarget, handleStopGenerating]);
 
-  // Use the autoAddActiveContentToContext setting
+  // Keep active note/web tab context opt-in only.
   useEffect(() => {
-    if (settings.autoAddActiveContentToContext !== undefined) {
-      // Only apply the setting if not in Project mode
-      if (selectedChain === ChainType.PROJECT_CHAIN) {
-        setIncludeActiveNote(false);
-        setIncludeActiveWebTab(false);
-      } else {
-        setIncludeActiveNote(settings.autoAddActiveContentToContext);
-        setIncludeActiveWebTab(settings.autoAddActiveContentToContext);
-      }
-    }
-  }, [settings.autoAddActiveContentToContext, selectedChain]);
+    setIncludeActiveNote(false);
+    setIncludeActiveWebTab(false);
+  }, [selectedChain]);
+
+  useEffect(() => {
+    void handleLoadAllChatHistory();
+  }, [handleLoadAllChatHistory]);
+
+  const renderSharedChatInput = useCallback(
+    (
+      onSend: (args?: {
+        toolCalls?: string[];
+        urls?: string[];
+        contextNotes?: TFile[];
+        contextTags?: string[];
+        contextFolders?: string[];
+        webTabs?: WebTabContext[];
+      }) => Promise<void>
+    ) => (
+      <ChatInput
+        inputMessage={inputMessage}
+        setInputMessage={setInputMessage}
+        handleSendMessage={onSend}
+        isGenerating={loading}
+        onStopGenerating={() => handleStopGenerating(ABORT_REASON.USER_STOPPED)}
+        app={app}
+        contextNotes={contextNotes}
+        setContextNotes={setContextNotes}
+        includeActiveNote={includeActiveNote}
+        setIncludeActiveNote={setIncludeActiveNote}
+        includeActiveWebTab={includeActiveWebTab}
+        setIncludeActiveWebTab={setIncludeActiveWebTab}
+        activeWebTab={currentActiveWebTab}
+        selectedImages={selectedImages}
+        onAddImage={(files: File[]) => setSelectedImages((prev) => [...prev, ...files])}
+        setSelectedImages={setSelectedImages}
+        disableModelSwitch={selectedChain === ChainType.PROJECT_CHAIN}
+        selectedTextContexts={selectedTextContexts}
+        onRemoveSelectedText={handleRemoveSelectedText}
+        showProgressCard={() => {
+          setProgressCardVisible(true);
+        }}
+        showIndexingCard={() => {
+          setIndexingCardVisible(true);
+        }}
+        latestTokenCount={latestTokenCount}
+      />
+    ),
+    [
+      inputMessage,
+      setInputMessage,
+      loading,
+      handleStopGenerating,
+      app,
+      contextNotes,
+      includeActiveNote,
+      includeActiveWebTab,
+      currentActiveWebTab,
+      selectedImages,
+      selectedChain,
+      selectedTextContexts,
+      handleRemoveSelectedText,
+    ]
+  );
 
   // Note: pendingMessages loading has been removed as ChatManager now handles
   // message persistence and loading automatically based on project context
 
   const renderChatComponents = () => (
-    <>
-      <div className="tw-flex tw-size-full tw-flex-col tw-overflow-hidden">
-        <NewVersionBanner currentVersion={plugin.manifest.version} />
-        <ChatMessages
-          chatHistory={chatHistory}
-          currentAiMessage={currentAiMessage}
-          streamingMessageId={streamingMessageIdRef.current}
-          loading={loading}
-          loadingMessage={loadingMessage}
-          app={app}
-          onRegenerate={handleRegenerate}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-          onReplaceChat={setInputMessage}
-          showHelperComponents={selectedChain !== ChainType.PROJECT_CHAIN}
+    <ChatWorkspace
+      showConversationSidebar={showConversationSidebar}
+      onToggleConversationSidebar={() => setShowConversationSidebar((visible) => !visible)}
+      onNewChat={() => void handleNewChat()}
+      sidebar={
+        <ConversationSidebar
+          isVisible={showConversationSidebar}
+          items={allChatHistoryItems}
+          runningChatIds={runningChatIds}
+          activeChatId={activeChatId}
+          selectedProjectId={selectedSidebarProjectId}
+          projects={(settings.projectList || []).map((project) => ({
+            id: project.id,
+            name: project.name,
+            pinned: (project as ProjectConfig & { pinned?: boolean }).pinned,
+          }))}
+          onLoadChat={handleLoadChat}
+          onDeleteChat={handleDeleteChat}
+          onRenameChat={handleRenameChat}
+          onTogglePin={handleToggleChatPin}
+          onAssignProject={handleAssignChatProject}
+          onRenameProject={handleRenameProjectFromSidebar}
+          onDeleteProject={handleDeleteProjectFromSidebar}
+          onToggleProjectPin={handleToggleProjectPin}
+          onSelectProject={handleSelectProjectFromSidebar}
+          onCreateProject={handleCreateProjectFromSidebar}
         />
-        {shouldShowProgressCard() ? (
-          <div className="tw-inset-0 tw-z-modal tw-flex tw-items-center tw-justify-center tw-rounded-xl">
-            <ProgressCard
-              plugin={plugin}
-              setHiddenCard={() => {
-                setProgressCardVisible(false);
-              }}
-              onEditContext={() => {
-                const currentProject = getCurrentProject();
-                if (currentProject) {
-                  // Open the context management modal for editing the project
-                  new ContextManageModal(
-                    app,
-                    (updatedProject) => {
-                      handleEditProject(currentProject, updatedProject);
-                    },
-                    currentProject
-                  ).open();
-                }
-              }}
+      }
+      main={
+        <>
+          <NewVersionBanner currentVersion={plugin.manifest.version} />
+          {selectedSidebarProjectId ? (
+            <ProjectOverviewPanel
+              project={
+                (settings.projectList || []).find((project) => project.id === selectedSidebarProjectId) ||
+                null
+              }
+              chats={allChatHistoryItems.filter((item) => item.projectId === selectedSidebarProjectId)}
+              runningChatIds={runningChatIds}
+              activeChatId={activeChatId}
+              onOpenChat={handleLoadChat}
+              onUpdateProject={handleUpdateProjectConfig}
+              inputArea={renderSharedChatInput(async (args) => {
+                const project = (settings.projectList || []).find(
+                  (item) => item.id === selectedSidebarProjectId
+                );
+                if (!project) return;
+                const nextDraftSessionId = uuidv4();
+                const nextViewKey = `__draft__:${nextDraftSessionId}::__no_project_page__`;
+                messagesByViewKeyRef.current.set(nextViewKey, []);
+                flushSync(() => {
+                  setCurrentProject(project);
+                  setActiveChatId(null);
+                  setDraftSessionId(nextDraftSessionId);
+                  setSelectedSidebarProjectId(null);
+                });
+                await handleSendMessage(args, project);
+              })}
             />
-          </div>
-        ) : shouldShowIndexingCard() ? (
-          <div className="tw-inset-0 tw-z-modal tw-flex tw-items-center tw-justify-center tw-rounded-xl">
-            <IndexingProgressCard
-              onClose={handleIndexingCardClose}
-              onPause={handleIndexingPause}
-              onResume={handleIndexingResume}
-              onStop={handleIndexingStop}
-            />
-          </div>
-        ) : (
-          <>
-            <ChatControls
-              onNewChat={handleNewChat}
-              onSaveAsNote={() => handleSaveAsNote()}
-              onLoadHistory={handleLoadChatHistory}
+          ) : (
+            <ChatThreadColumn
+              chatHistory={chatHistory}
+              currentAiMessage={currentAiMessage}
+              streamingMessageId={currentStreamingMessageId}
+              loading={loading}
+              loadingMessage={loadingMessage}
+              app={app}
+              onRegenerate={handleRegenerate}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+              onReplaceChat={setInputMessage}
+              showHelperComponents={selectedChain !== ChainType.PROJECT_CHAIN}
+              statusOverlay={
+                shouldShowProgressCard() ? (
+                  <ChatModalBackdrop>
+                    <ProgressCard
+                      plugin={plugin}
+                      setHiddenCard={() => {
+                        setProgressCardVisible(false);
+                      }}
+                      onEditContext={() => {
+                        const currentProject = getCurrentProject();
+                        if (currentProject) {
+                          new ContextManageModal(
+                            app,
+                            (updatedProject) => {
+                              handleEditProject(currentProject, updatedProject);
+                            },
+                            currentProject
+                          ).open();
+                        }
+                      }}
+                    />
+                  </ChatModalBackdrop>
+                ) : shouldShowIndexingCard() ? (
+                  <ChatModalBackdrop>
+                    <IndexingProgressCard
+                      onClose={handleIndexingCardClose}
+                      onPause={handleIndexingPause}
+                      onResume={handleIndexingResume}
+                      onStop={handleIndexingStop}
+                    />
+                  </ChatModalBackdrop>
+                ) : null
+              }
+              onSaveAsNote={handleSaveAsNote}
               onModeChange={(newMode) => {
                 setPreviousMode(selectedChain);
-                // Hide chat UI when switching to project mode
                 if (newMode === ChainType.PROJECT_CHAIN) {
                   setShowChatUI(false);
                 }
               }}
-              chatHistory={chatHistoryItems}
-              onUpdateChatTitle={handleUpdateChatTitle}
-              onDeleteChat={handleDeleteChat}
-              onLoadChat={handleLoadChat}
-              onOpenSourceFile={handleOpenSourceFile}
               latestTokenCount={latestTokenCount}
+              chatInput={renderSharedChatInput(handleSendMessage)}
             />
-            <ChatInput
-              inputMessage={inputMessage}
-              setInputMessage={setInputMessage}
-              handleSendMessage={handleSendMessage}
-              isGenerating={loading}
-              onStopGenerating={() => handleStopGenerating(ABORT_REASON.USER_STOPPED)}
-              app={app}
-              contextNotes={contextNotes}
-              setContextNotes={setContextNotes}
-              includeActiveNote={includeActiveNote}
-              setIncludeActiveNote={setIncludeActiveNote}
-              includeActiveWebTab={includeActiveWebTab}
-              setIncludeActiveWebTab={setIncludeActiveWebTab}
-              activeWebTab={currentActiveWebTab}
-              selectedImages={selectedImages}
-              onAddImage={(files: File[]) => setSelectedImages((prev) => [...prev, ...files])}
-              setSelectedImages={setSelectedImages}
-              disableModelSwitch={selectedChain === ChainType.PROJECT_CHAIN}
-              selectedTextContexts={selectedTextContexts}
-              onRemoveSelectedText={handleRemoveSelectedText}
-              showProgressCard={() => {
-                setProgressCardVisible(true);
-              }}
-              showIndexingCard={() => {
-                setIndexingCardVisible(true);
-              }}
-            />
-          </>
-        )}
-      </div>
-    </>
+          )}
+        </>
+      }
+      createProjectDialog={
+        <CreateProjectDialog
+          open={isCreateProjectDialogOpen}
+          onOpenChange={setIsCreateProjectDialogOpen}
+          projectName={newProjectName}
+          onProjectNameChange={setNewProjectName}
+          onConfirm={handleConfirmCreateProject}
+        />
+      }
+    />
   );
 
   return (
@@ -967,10 +1579,8 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
                     setSelectedChain(previousMode);
                     setPreviousMode(null);
                   } else {
-                    // default back to chat or plus mode
-                    setSelectedChain(
-                      isPlusUser ? ChainType.COPILOT_PLUS_CHAIN : ChainType.LLM_CHAIN
-                    );
+                    // default back to chat
+                    setSelectedChain(ChainType.LLM_CHAIN);
                   }
                 }}
                 showChatUI={(v) => setShowChatUI(v)}
