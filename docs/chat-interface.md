@@ -1,27 +1,20 @@
 # Chat Interface
 
-The Copilot chat panel is the main way you interact with AI in Obsidian. This guide covers everything about the chat UI: modes, message controls, history, settings, and advanced features like auto-compact.
+The Draco chat panel is the main way you interact with AI in Obsidian. This guide covers everything about the chat UI: modes, message controls, history, settings, and advanced features like auto-compact.
 
 ---
 
 ## Chat Modes
 
-Copilot offers four modes. You can switch between them using the mode selector at the top of the chat panel.
+Draco offers three modes. You can switch between them using the mode selector at the top of the chat panel.
 
 ### Chat
 General-purpose conversation. Good for writing, brainstorming, summarizing, or any task where you want to talk to an AI. Your currently open note and selected text are automatically included as context.
 
 ### Vault QA (Basic)
-Ask questions about your vault content. Copilot uses lexical search (keyword matching) to find relevant notes and passes them as context to the AI. No indexing required. Good for quick questions about your notes.
+Ask questions about your vault content. Draco uses lexical search (keyword matching) to find relevant notes and passes them as context to the AI. No indexing required. Good for quick questions about your notes.
 
-### Copilot Plus
-The most powerful mode. Requires a [Copilot Plus](copilot-plus-and-self-host.md) license. Combines Chat and Vault QA with an autonomous agent that can:
-- Search your vault and the web
-- Read and edit notes
-- Remember things across conversations
-- Use a growing set of tools automatically
-
-### Projects (alpha)
+### Projects
 Focused workspaces with their own context, model, system prompt, and isolated chat history. Useful for keeping separate AI conversations per project. See [Projects](projects.md) for details.
 
 ---
@@ -40,7 +33,7 @@ You can mention specific notes directly in your message using double-bracket syn
 [[Note Title]]
 ```
 
-Copilot adds the note's content to your message as context in the background. This is different from @-mentions — it's typed directly in your message text.
+Draco adds the note's content to your message as context in the background. This is different from @-mentions — it's typed directly in your message text.
 
 ### User Message Buttons
 
@@ -83,7 +76,7 @@ All three variables are required. You can customize the format in Settings → B
 
 ### AI-Generated Titles
 
-When **Generate AI chat title on save** is enabled (default), Copilot asks the AI to generate a short, descriptive title for the conversation when saving. When disabled, the first 10 words of your first message are used instead.
+When **Generate AI chat title on save** is enabled (default), Draco asks the AI to generate a short, descriptive title for the conversation when saving. When disabled, the first 10 words of your first message are used instead.
 
 ### Loading Previous Chats
 
@@ -108,7 +101,7 @@ Click the **gear icon** inside the chat panel to open per-session settings. Thes
 
 ## Token Counter
 
-Copilot shows a token count indicator at the bottom of the chat. This estimates how many tokens are being used by your current context. Useful for knowing when you're approaching context limits.
+Draco shows a token count indicator at the bottom of the chat. This estimates how many tokens are being used by your current context. Useful for knowing when you're approaching context limits.
 
 ---
 
@@ -124,13 +117,13 @@ When auto-compact triggers, you'll see a "Compacting" indicator in the chat. The
 
 ## Suggested Prompts
 
-When starting a new chat, Copilot may show suggested prompts based on your active note or previous conversations. You can enable or disable this in Settings → Basic → **Show suggested prompts**.
+When starting a new chat, Draco may show suggested prompts based on your active note or previous conversations. You can enable or disable this in Settings → Basic → **Show suggested prompts**.
 
 ## Relevant Notes
 
-Copilot can display a list of notes related to your currently active note in the chat panel. This helps surface notes you might want to reference without manually searching.
+Draco can display a list of notes related to your currently active note in the chat panel. This helps surface notes you might want to reference without manually searching.
 
-Enable in **Settings → Copilot → Basic → Relevant Notes** (on by default).
+Enable in **Settings → Draco → Basic → Relevant Notes** (on by default).
 
 ## Save Chat as Note
 
@@ -142,7 +135,7 @@ Click **Save Chat as Note** in the chat toolbar to write the current conversatio
 
 Click the **pencil/new chat icon** to start a fresh conversation. This clears the chat window and resets context to your currently active note (use **Save Chat as Note** first if you still need the previous thread written to disk).
 
-You can also use the command palette: **New Copilot Chat**.
+You can also use the command palette: **New Draco Chat**.
 
 ---
 
@@ -150,5 +143,4 @@ You can also use the command palette: **New Copilot Chat**.
 
 - [Context and Mentions](context-and-mentions.md) — Control what context the AI sees
 - [System Prompts](system-prompts.md) — Customize AI behavior with system prompts
-- [Agent Mode and Tools](agent-mode-and-tools.md) — What Plus mode can do
 - [Projects](projects.md) — Isolated workspaces with separate histories

@@ -1,6 +1,6 @@
 # Vault Search and Indexing
 
-Copilot can search your vault to find relevant notes and answer questions grounded in your own content. This guide explains the two types of search, how to manage the index, and how to configure what gets indexed.
+Draco can search your vault to find relevant notes and answer questions grounded in your own content. This guide explains the two types of search, how to manage the index, and how to configure what gets indexed.
 
 ---
 
@@ -10,40 +10,40 @@ Copilot can search your vault to find relevant notes and answer questions ground
 
 Lexical search finds notes that contain the exact words you used. It's fast, requires no setup, and works out of the box.
 
-- **Used in**: Vault QA (Basic) mode
+- **Used in**: Vault QA mode
 - **How it works**: Looks for your exact keywords in note titles and content
 - **Strengths**: Fast, precise, no embedding API calls needed
 - **Limitations**: Won't find notes that use different words to express the same idea
 
-**RAM Limit**: The lexical search index is held in memory. You can configure the memory limit in **Settings → Copilot → QA → Lexical Search RAM Limit** (default: 100 MB, range: 20–1,000 MB).
+**RAM Limit**: The lexical search index is held in memory. You can configure the memory limit in **Settings → Draco → QA → Lexical Search RAM Limit** (default: 100 MB, range: 20–1,000 MB).
 
-**Lexical Boosts**: Copilot can boost search results from notes in the same folder as the current note, or from notes that link to each other. Enable in **Settings → Copilot → QA → Enable Lexical Boosts** (on by default).
+**Lexical Boosts**: Draco can boost search results from notes in the same folder as the current note, or from notes that link to each other. Enable in **Settings → Draco → QA → Enable Lexical Boosts** (on by default).
 
 ### Semantic Search (Meaning-Based)
 
 Semantic search finds notes that are conceptually related, even if they don't share exact words.
 
-- **Used in**: Vault QA and Copilot Plus modes — but **disabled by default**. You must explicitly enable it.
+- **Used in**: Vault QA mode — but **disabled by default**. You must explicitly enable it.
 - **How it works**: Converts your notes into numerical vectors (using an embedding model), then finds notes whose vectors are closest to your query
 - **Strengths**: Finds notes by concept and meaning, great for "fuzzy" recall
 - **Cost**: Requires embedding API calls (costs money for paid embedding models)
-- **Enable**: **Settings → Copilot → QA → Enable Semantic Search** — turn this on to activate semantic search
+- **Enable**: **Settings → Draco → QA → Enable Semantic Search** — turn this on to activate semantic search
 
 ---
 
 ## Index Management
 
-The semantic search index stores the vector embeddings of your notes. Manage it from **Settings → Copilot → QA**.
+The semantic search index stores the vector embeddings of your notes. Manage it from **Settings → Draco → QA**.
 
 ### Auto-Index Strategy
 
-Controls when Copilot automatically updates the index:
+Controls when Draco automatically updates the index:
 
 | Strategy | When the index updates |
 |---|---|
 | **NEVER** | Manual only — you must trigger indexing yourself |
 | **ON STARTUP** | Updates when Obsidian starts or the plugin reloads |
-| **ON MODE SWITCH** | Updates when you switch to Vault QA or Copilot Plus mode (Recommended) |
+| **ON MODE SWITCH** | Updates when you switch to Vault QA mode (Recommended) |
 
 The default is **ON MODE SWITCH**.
 
@@ -101,7 +101,7 @@ This shows the total token count across your vault, which you can use to estimat
 
 ### Exclusions
 
-**Settings → Copilot → QA → Exclusions**
+**Settings → Draco → QA → Exclusions**
 
 Comma-separated list of patterns. Notes matching these patterns are excluded. Supports:
 - Folder names: `private` — excludes the folder named "private"
@@ -118,7 +118,7 @@ The `copilot` folder is always excluded automatically (it contains the plugin's 
 
 ### Inclusions
 
-**Settings → Copilot → QA → Inclusions**
+**Settings → Draco → QA → Inclusions**
 
 Comma-separated list. If set, **only** notes matching these patterns are indexed. Useful for indexing a specific area of your vault.
 
@@ -128,7 +128,7 @@ Leave empty to include everything (except exclusions).
 
 ## Embedding Settings
 
-These settings appear in **Settings → Copilot → QA** when Semantic Search is enabled.
+These settings appear in **Settings → Draco → QA** when Semantic Search is enabled.
 
 ### Requests per Minute
 
@@ -142,7 +142,7 @@ How many text chunks to send per API request. Default is 16. Larger batches are 
 
 ### Partitions
 
-The index is split into partitions to handle large vaults. You can control the number of partitions in **Settings → Copilot → QA → Number of Partitions**. If you have a large vault, increase this value to avoid index errors.
+The index is split into partitions to handle large vaults. You can control the number of partitions in **Settings → Draco → QA → Number of Partitions**. If you have a large vault, increase this value to avoid index errors.
 
 > **If you hit a "RangeError: invalid string length" error**: This means your vault is too large for a single partition. Increase the number of partitions in QA settings. A good rule of thumb is that the first partition file (found in `.obsidian/`) should be under ~400 MB.
 
@@ -152,7 +152,7 @@ The index is split into partitions to handle large vaults. You can control the n
 
 When enabled, AI responses in Vault QA include footnote-style citations pointing to the source notes used in the answer.
 
-**Enable**: **Settings → Copilot → QA → Enable Inline Citations**
+**Enable**: **Settings → Draco → QA → Enable Inline Citations**
 
 This is an experimental feature. Not all models handle it well.
 
@@ -160,7 +160,7 @@ This is an experimental feature. Not all models handle it well.
 
 ## Obsidian Sync
 
-If you use Obsidian Sync, the vector index can be synced across devices. Enable **Settings → Copilot → QA → Enable Index Sync**.
+If you use Obsidian Sync, the vector index can be synced across devices. Enable **Settings → Draco → QA → Enable Index Sync**.
 
 > **Note**: The index can be large (hundreds of MB for big vaults). Keep this in mind for sync limits and mobile data usage.
 
@@ -168,7 +168,7 @@ If you use Obsidian Sync, the vector index can be synced across devices. Enable 
 
 ## Mobile Considerations
 
-By default, Copilot **disables indexing on mobile** to save battery and data. The setting is in **Settings → Copilot → QA → Disable index on mobile** (on by default).
+By default, Draco **disables indexing on mobile** to save battery and data. The setting is in **Settings → Draco → QA → Disable index on mobile** (on by default).
 
 On mobile, you can still use Vault QA with lexical search, but semantic search won't update automatically.
 
@@ -176,6 +176,4 @@ On mobile, you can still use Vault QA with lexical search, but semantic search w
 
 ## Related
 
-- [Agent Mode and Tools](agent-mode-and-tools.md) — How @vault uses the index in Plus mode
 - [Models and Parameters](models-and-parameters.md) — Choosing an embedding model
-- [Copilot Plus and Self-Host](copilot-plus-and-self-host.md) — Miyo-powered local semantic search

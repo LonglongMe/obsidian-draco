@@ -1,29 +1,38 @@
-# Getting Started with Copilot for Obsidian
+# Getting Started with Draco for Obsidian
 
-Copilot for Obsidian is an AI-powered plugin that brings large language models (LLMs) directly into your note-taking workflow. You can chat with AI, ask questions about your vault, run custom commands, search the web, and even have the AI edit your notes — all without leaving Obsidian.
+Draco for Obsidian is an AI-powered plugin that brings large language models (LLMs) directly into your note-taking workflow. You can chat with AI, ask questions about your vault, run custom commands, and more — all without leaving Obsidian.
 
-## What Can Copilot Do?
+## What Can Draco Do?
 
 - **Chat**: Have a conversation with an AI assistant
 - **Vault Q&A**: Ask questions and get answers grounded in your own notes
 - **Note editing**: Ask the AI to write or update your notes for you
 - **Semantic search**: Find notes by meaning, not just keywords
 - **Custom commands**: Run AI-powered prompts on selected text
-- **Web search**: Fetch and summarize information from the internet
-- **Memory**: Have the AI remember facts about you across conversations
+- **Projects**: Create focused workspaces with isolated context
 
-Copilot supports 16+ AI providers including OpenAI, Anthropic, Google Gemini, Ollama (local), and more.
+Draco supports multiple AI providers including OpenRouter, OpenAI, Anthropic, Google Gemini, Ollama (local), and more.
 
 ---
 
 ## Installation
 
+### From Obsidian Community Plugins
+
 1. Open **Obsidian Settings** → **Community plugins**
 2. Turn off **Safe mode** if prompted
-3. Click **Browse** and search for **Copilot**
+3. Click **Browse** and search for **Draco**
 4. Click **Install**, then **Enable**
 
-Copilot is now installed. A robot icon will appear in the left sidebar ribbon.
+Draco is now installed. A robot icon will appear in the left sidebar ribbon.
+
+### Manual Installation (Development)
+
+1. Clone this repository
+2. Run `npm install` to install dependencies
+3. Run `npm run build` to build the plugin
+4. Copy `main.js`, `manifest.json`, and `styles.css` to your vault's `.obsidian/plugins/draco/` folder
+5. Enable the plugin in Obsidian settings
 
 ---
 
@@ -31,7 +40,7 @@ Copilot is now installed. A robot icon will appear in the left sidebar ribbon.
 
 ### Step 1: Open Plugin Settings
 
-Go to **Settings** → **Copilot** (scroll down to the Community Plugins section).
+Go to **Settings** → **Draco** (scroll down to the Community Plugins section).
 
 ### Step 2: Add an API Key
 
@@ -39,7 +48,7 @@ On the **Basic** tab, click **Set Keys** to open the API key dialog. Enter the k
 
 | Provider | Where to get a key |
 |---|---|
-| OpenRouter (default) | https://openrouter.ai/keys |
+| OpenRouter (recommended) | https://openrouter.ai/keys |
 | OpenAI | https://platform.openai.com/api-keys |
 | Anthropic | https://console.anthropic.com/settings/keys |
 | Google Gemini | https://makersuite.google.com/app/apikey |
@@ -56,8 +65,7 @@ Use the **Default Mode** dropdown to set which mode opens by default:
 
 - **Chat** — General conversation, good for most tasks
 - **Vault QA** — Ask questions answered from your notes
-- **Copilot Plus** — Advanced mode with autonomous agent and tools (requires Copilot Plus license)
-- **Projects** — Focused workspaces (alpha feature)
+- **Projects** — Focused workspaces
 
 Most users should start with **Chat** mode.
 
@@ -65,15 +73,15 @@ Most users should start with **Chat** mode.
 
 ## Opening the Chat Panel
 
-You can open Copilot in several ways:
+You can open Draco in several ways:
 
 - Click the **robot icon** in the left ribbon (sidebar)
-- Use the command palette: `Ctrl/Cmd+P` → **Open Copilot Chat Window**
-- Use the hotkey `Ctrl/Cmd+P` → **Toggle Copilot Chat Window** to show/hide it
+- Use the command palette: `Ctrl/Cmd+P` → **Open Draco Chat Window**
+- Use the hotkey `Ctrl/Cmd+P` → **Toggle Draco Chat Window** to show/hide it
 
 ### Sidebar vs. Editor Tab
 
-By default, Copilot opens as a **view** (sidebar panel). You can change this in Settings → Copilot → Basic → **Open chat in**:
+By default, Draco opens as a **view** (sidebar panel). You can change this in Settings → Draco → Basic → **Open chat in**:
 - **View** — Opens in the sidebar, stays visible as you work
 - **Editor** — Opens as an editor tab, giving it more screen space
 
@@ -93,35 +101,33 @@ The AI will automatically include your currently open note as context, so you ca
 
 ## Keyboard Shortcuts
 
-These are the default shortcuts. You can customize them in **Obsidian Settings** → **Hotkeys** → search for "Copilot".
+These are the default shortcuts. You can customize them in **Obsidian Settings** → **Hotkeys** → search for "Draco".
 
 | Action | Default Shortcut |
 |---|---|
-| Open Copilot Chat Window | *(unbound — assign in Hotkeys)* |
-| Toggle Copilot Chat Window | *(unbound — assign in Hotkeys)* |
-| New Copilot Chat | *(unbound — assign in Hotkeys)* |
+| Open Draco Chat Window | *(unbound — assign in Hotkeys)* |
+| Toggle Draco Chat Window | *(unbound — assign in Hotkeys)* |
+| New Draco Chat | *(unbound — assign in Hotkeys)* |
 | Quick Ask (floating input) | *(unbound — assign in Hotkeys)* |
 | Trigger Quick Command | *(unbound — assign in Hotkeys)* |
 | Add selection to chat context | *(unbound — assign in Hotkeys)* |
 
 ### Send Shortcut
 
-By default, **Enter** sends a message and **Shift+Enter** adds a new line. You can swap this in Settings → Copilot → Basic → **Default Send Shortcut**.
-
----
+By default, **Enter** sends a message and **Shift+Enter** adds a new line. You can swap this in Settings → Draco → Basic → **Default Send Shortcut**.
 
 ---
 
 ## Glossary
 
 **LLM (Large Language Model)**
-The AI "brain" behind Copilot — a model trained on vast text to understand and generate human language, powering chat, summarization, and writing assistance.
+The AI "brain" behind Draco — a model trained on vast text to understand and generate human language, powering chat, summarization, and writing assistance.
 
 **API (Application Programming Interface)**
-A way for Copilot to communicate with external AI services. You provide an API key, which is like a password that lets Copilot use a provider's AI models on your behalf. Note: an OpenAI API key is *different* from a ChatGPT Plus subscription — you don't need ChatGPT Plus to use Copilot.
+A way for Draco to communicate with external AI services. You provide an API key, which is like a password that lets Draco use a provider's AI models on your behalf.
 
 **API Key**
-A secret token from an AI provider that authorizes Copilot to make requests. Most providers require you to have a billing account with a positive balance.
+A secret token from an AI provider that authorizes Draco to make requests. Most providers require you to have a billing account with a positive balance.
 
 **Token**
 A small unit of text (roughly ¾ of a word) that AI models process. Tokens measure how much text the AI can handle at once and relate to usage costs.
@@ -146,3 +152,4 @@ A database that stores your notes as mathematical vectors (embeddings) so they c
 - [LLM Providers](llm-providers.md) — Set up your preferred AI provider
 - [Context and Mentions](context-and-mentions.md) — Control what context the AI sees
 - [Vault Search and Indexing](vault-search-and-indexing.md) — Set up semantic search over your notes
+- [Projects](projects.md) — Create focused workspaces

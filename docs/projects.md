@@ -2,8 +2,6 @@
 
 Projects are focused AI workspaces. Each project has its own model, system prompt, context sources, and completely isolated chat history. Use projects to keep separate AI conversations per client, topic, or area of work.
 
-Projects support **50+ file types** beyond markdown, including PDFs, Word documents, PowerPoint, Excel, images, and more — making them ideal for analyzing large or diverse document collections.
-
 > **Note**: Projects is an alpha feature. It may have rough edges and is subject to change.
 
 ---
@@ -12,7 +10,7 @@ Projects support **50+ file types** beyond markdown, including PDFs, Word docume
 
 In regular chat, all conversations share the same settings and model. Projects let you create dedicated workspaces with:
 
-- **A specific context** — Specific notes, folders, URLs, or YouTube videos the AI always has access to
+- **A specific context** — Specific notes, folders the AI always has access to
 - **A dedicated model** — Different projects can use different AI models
 - **A custom system prompt** — Each project can have its own instructions for the AI
 - **Isolated chat history** — Conversations in one project don't mix with conversations in another
@@ -20,7 +18,7 @@ In regular chat, all conversations share the same settings and model. Projects l
 **Example use cases:**
 - A "Research" project that always has your research notes as context
 - A "Client Work" project with a specific system prompt and access to client-related notes
-- A "Learning" project with YouTube video URLs for study materials
+- A "Learning" project with specific study materials
 
 ---
 
@@ -28,7 +26,7 @@ In regular chat, all conversations share the same settings and model. Projects l
 
 1. Open the chat panel
 2. Click the mode selector at the top of the chat
-3. Select **Projects (alpha)**
+3. Select **Projects**
 4. Click **New Project** (or the `+` button)
 5. Fill in the project details and save
 
@@ -68,14 +66,6 @@ Specify which notes or folders to include in this project's context:
 
 This scopes the AI's knowledge to just the notes relevant to your project.
 
-### Web URLs
-
-Add web page URLs that are fetched and included as context for every conversation in this project. Useful for documentation, reference pages, or web resources you frequently consult.
-
-### YouTube URLs
-
-Add YouTube video URLs whose transcripts are loaded into context for every conversation.
-
 ---
 
 ## Working in a Project
@@ -90,7 +80,7 @@ Each project maintains its own chat history, completely separate from other proj
 
 ### Context Loading
 
-When you open a project, Copilot loads the configured context (notes, URLs, etc.) automatically. For large projects with many notes, this may take a moment.
+When you open a project, Draco loads the configured context (notes, etc.) automatically. For large projects with many notes, this may take a moment.
 
 ---
 
@@ -102,7 +92,7 @@ Go to the project selector to manage your projects:
 - **Edit**: Click the edit icon to change a project's settings
 - **Delete**: Remove the project entry from the list (saved conversation files in your vault are not deleted)
 
-Sort strategy: **Settings → Copilot → Basic → Project list sort strategy**
+Sort strategy: **Settings → Draco → Basic → Project list sort strategy**
 
 ---
 
@@ -112,7 +102,6 @@ As an alpha feature, projects have some known limitations:
 
 - Large context sources (many notes or large files) may slow down context loading
 - The context loading on project switch is synchronous — the AI isn't available until loading completes
-- Some features available in regular Plus mode may behave differently in projects
 - Auto-compact behavior is the same as regular chat
 
 ---
@@ -122,4 +111,3 @@ As an alpha feature, projects have some known limitations:
 - [Chat Interface](chat-interface.md) — Chat modes overview, new chat behavior, history
 - [System Prompts](system-prompts.md) — Custom system prompts for projects
 - [Context and Mentions](context-and-mentions.md) — How context works
-- [Copilot Plus and Self-Host](copilot-plus-and-self-host.md) — Plus features

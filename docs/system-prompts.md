@@ -6,7 +6,7 @@ A system prompt is a set of instructions you give the AI that shapes how it beha
 
 ## Overview
 
-Copilot has two layers of system prompts:
+Draco has two layers of system prompts:
 
 1. **Built-in system prompt** — Always active. Defines core behaviors specific to Obsidian (how to format Obsidian links, how to handle note references, etc.)
 2. **Custom system prompt** — Optional. You can write your own instructions that are appended to the built-in prompt.
@@ -17,18 +17,17 @@ Copilot has two layers of system prompts:
 
 The built-in prompt is always active and cannot be edited. It tells the AI:
 
-- It is "Obsidian Copilot" — an AI integrated into Obsidian
+- It is "Draco" — an AI integrated into Obsidian
 - How to format Obsidian internal links: `[[Note Title]]`
 - How to format Obsidian image links: `![[image.png]]`
 - How to format LaTeX math: use `$...$` not `\[...\]`
-- How to handle @vault and @tool mentions
 - To use `-` for bullet points (not `*`)
 - To respond in the language of the user's query
 - To treat "note" as referring to an Obsidian note
 
-This prompt ensures Copilot's output is correctly formatted for Obsidian and aware of its context.
+This prompt ensures Draco's output is correctly formatted for Obsidian and aware of its context.
 
-> **Warning**: Disabling the built-in prompt can break features like Vault QA, memory, and agent tools. Avoid disabling it unless you have a specific reason.
+> **Warning**: Disabling the built-in prompt can break features like Vault QA. Avoid disabling it unless you have a specific reason.
 
 ---
 
@@ -43,13 +42,13 @@ Custom system prompts are stored as markdown files in your vault, in the folder:
 copilot/system-prompts/
 ```
 
-You can change this folder in **Settings → Copilot → Advanced → System Prompts Folder Name**.
+You can change this folder in **Settings → Draco → Advanced → System Prompts Folder Name**.
 
 ### Creating a System Prompt
 
 #### From Settings
 
-1. Go to **Settings → Copilot → Advanced**
+1. Go to **Settings → Draco → Advanced**
 2. Under **User System Prompt**, click the `+` button
 3. Enter a title for the prompt (e.g., "Academic Writing")
 4. A new markdown file is created in your system prompts folder
@@ -84,7 +83,7 @@ You are a Zettelkasten assistant helping me build a knowledge base.
 
 You can set one of your custom prompts as the global default — it will be used for all new chat sessions:
 
-1. Go to **Settings → Copilot → Advanced**
+1. Go to **Settings → Draco → Advanced**
 2. Under **Default System Prompt**, select your prompt from the dropdown
 3. Any new conversation will start with this prompt active
 
@@ -106,7 +105,7 @@ You can override the system prompt for just the current conversation:
 
 When you have a custom prompt active:
 
-1. The built-in Copilot prompt runs first
+1. The built-in Draco prompt runs first
 2. Your custom prompt is appended after it
 
 Both sets of instructions are active simultaneously. Your custom instructions can refine, restrict, or extend the default behavior, but they don't replace it.
